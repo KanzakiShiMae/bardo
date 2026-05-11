@@ -85,6 +85,7 @@ public class MainController implements Initializable {
     @FXML private Slider    progressSlider, volumeSlider;
     @FXML private Label     timeElapsed, timeTotal, volumeLabel;
     @FXML private StackPane vinylContainer;
+    @FXML private javafx.scene.canvas.Canvas miniWaveCanvas;
 
     @FXML private FlowPane featuredPane;
     @FXML private Label    greetingLabel;
@@ -94,7 +95,6 @@ public class MainController implements Initializable {
     private double  windowX, windowY;
 
     private ResizeHelper     resizeHelper;
-    private RotateTransition vinylRotation;
     private Timeline         globalProgressTimer;
     private PauseTransition  volumeSavePause;
     private javafx.stage.Popup toastPopup;
@@ -134,7 +134,6 @@ public class MainController implements Initializable {
 
         setupTitleBar();
         setupWindowDrag();
-        setupVinylAnimation();
         setupProgressSlider();
         setupVolumeSlider();
         volumeSlider.setValue(libraryService.loadVolume());
@@ -209,9 +208,8 @@ public class MainController implements Initializable {
     }
 
     private void applyCircularClip() {
-        Circle clip = new Circle(28);
-        clip.centerXProperty().bind(albumArt.fitWidthProperty().divide(2));
-        clip.centerYProperty().bind(albumArt.fitHeightProperty().divide(2));
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(44, 44);
+        clip.setArcWidth(10); clip.setArcHeight(10);
         albumArt.setClip(clip);
     }
 
@@ -302,12 +300,6 @@ public class MainController implements Initializable {
     private javafx.stage.Screen screenAt(double sx, double sy) {
         return javafx.stage.Screen.getScreensForRectangle(sx, sy, 1, 1)
                 .stream().findFirst().orElse(javafx.stage.Screen.getPrimary());
-    }
-
-    private void setupVinylAnimation() {
-        vinylRotation = new RotateTransition(Duration.seconds(6), vinylContainer);
-        vinylRotation.setByAngle(360); vinylRotation.setCycleCount(Animation.INDEFINITE);
-        vinylRotation.setInterpolator(Interpolator.LINEAR);
     }
 
     private void setupProgressSlider() {
@@ -532,7 +524,7 @@ public class MainController implements Initializable {
             if (pi != null) {
                 if (pi.mashupXfadeAnim != null) { pi.mashupXfadeAnim.stop(); pi.mashupXfadeAnim = null; }
                 if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
-                if (pi.waveAnim != null) pi.waveAnim.stop();
+                if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
                 pi.isPlaying = false;
                 if (pi.mashupPartner != null) {
                     PlayerInstance pb = pi.mashupPartner;
@@ -722,7 +714,6 @@ public class MainController implements Initializable {
         if (pi.mediaPlayer != null) {
             pi.mediaPlayer.pause();
             pi.isPlaying = false;
-            if (pi.waveAnim != null) pi.waveAnim.pause();
             if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
         }
 
@@ -735,12 +726,20 @@ public class MainController implements Initializable {
     private void buildPanel(PlayerInstance pi) {
         PlayerPanelBuilder.build(pi,
             this::togglePlayInstance,
-            this::playPrevInInstance,
-            this::playNextInInstance,
+            p -> navigateTab(-1),
+            p -> navigateTab(+1),
             this::toggleShuffle,
             (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
             p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
         );
+    }
+
+    private void navigateTab(int direction) {
+        if (openTabs.isEmpty()) return;
+        int idx = openTabs.indexOf(activeTab);
+        if (idx < 0) return;
+        int next = (idx + direction + openTabs.size()) % openTabs.size();
+        activateTab(openTabs.get(next));
     }
 
     /**
@@ -788,6 +787,29 @@ public class MainController implements Initializable {
                 else            { onSongEnded(pi); }
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
+
+            // ── Audio spectrum → real-time waveform ──────────────────────────
+            final int BANDS = 32;
+            pi.waveSmoothed = new float[BANDS];
+            final float[] smoothed = pi.waveSmoothed;
+            final boolean[] pending = {false};
+            pi.mediaPlayer.setAudioSpectrumNumBands(BANDS);
+            pi.mediaPlayer.setAudioSpectrumInterval(1.0 / 30);
+            pi.mediaPlayer.setAudioSpectrumListener((ts, dur2, mags, phases) -> {
+                for (int i = 0; i < BANDS; i++) {
+                    float target = Math.max(0f, (mags[i] + 60f) / 60f);
+                    smoothed[i] = smoothed[i] * 0.55f + target * 0.45f;
+                }
+                if (!pending[0]) {
+                    pending[0] = true;
+                    Platform.runLater(() -> {
+                        drawWaveCanvas(pi.panelWaveCanvas, smoothed);
+                        if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed);
+                        pending[0] = false;
+                    });
+                }
+            });
+
             pi.mediaPlayer.play();
             pi.isPlaying = true;
             applyVolumesToAll();
@@ -803,8 +825,6 @@ public class MainController implements Initializable {
             try { Image thumb = new Image(song.getThumbnailUrl(), true); if (pi.artView != null) pi.artView.setImage(thumb); }
             catch (Exception ignored) {}
         }
-        if (pi.waveAnim != null) pi.waveAnim.play();
-
         AppTab existingTab = findTab(pi.tabId);
         if (existingTab != null) existingTab.title = song.getTitle();
         openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, true, null);
@@ -823,8 +843,7 @@ public class MainController implements Initializable {
             pi.mediaPlayer.play();
             pi.isPlaying = true;
             applyVolumesToAll();
-            if (pi.waveAnim != null) pi.waveAnim.play();
-            if (pi == focusedPlayer) { vinylRotation.play(); addGlowEffect(); }
+            if (pi == focusedPlayer) addGlowEffect();
             updatePlayPauseButton(); rebuildTabBar();
         } else {
             fadeOutAndPause(pi);
@@ -837,14 +856,13 @@ public class MainController implements Initializable {
         if (!piA.isPlaying) {
             piA.mediaPlayer.play(); piA.isPlaying = true;
             if (piB != null && piB.mediaPlayer != null) { piB.mediaPlayer.play(); piB.isPlaying = true; }
-            if (piA.waveAnim != null) piA.waveAnim.play();
-            if (piA == focusedPlayer) { vinylRotation.play(); addGlowEffect(); }
+            if (piA == focusedPlayer) addGlowEffect();
             updatePlayPauseButton(); rebuildTabBar();
         } else {
             piA.mediaPlayer.pause(); piA.isPlaying = false;
             if (piB != null && piB.mediaPlayer != null) { piB.mediaPlayer.pause(); piB.isPlaying = false; }
-            if (piA.waveAnim != null) piA.waveAnim.pause();
-            if (piA == focusedPlayer) { vinylRotation.pause(); removeGlowEffect(); }
+            startWaveDecay(piA);
+            if (piA == focusedPlayer) removeGlowEffect();
             updatePlayPauseButton(); rebuildTabBar();
         }
     }
@@ -881,7 +899,7 @@ public class MainController implements Initializable {
         if (pi.mediaPlayer == null) return;
         pi.isPlaying = false;
         if (pi == focusedPlayer) {
-            vinylRotation.pause(); removeGlowEffect(); updatePlayPauseButton();
+            removeGlowEffect(); updatePlayPauseButton();
         } else {
             if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
         }
@@ -890,7 +908,7 @@ public class MainController implements Initializable {
             new KeyValue(pi.mediaPlayer.volumeProperty(), 0.0, Interpolator.EASE_IN)));
         pi.fadeOutAnim.setOnFinished(ev -> {
             pi.mediaPlayer.pause();
-            if (pi.waveAnim != null) pi.waveAnim.pause();
+            startWaveDecay(pi);
             pi.fadeOutAnim = null;
             applyVolumesToAll();
             rebuildTabBar();
@@ -901,7 +919,7 @@ public class MainController implements Initializable {
     private void onSongEnded(PlayerInstance pi) {
         pi.isPlaying = false;
         applyVolumesToAll();
-        if (pi.waveAnim != null) pi.waveAnim.pause();
+        startWaveDecay(pi);
         if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
         pickBestFocusedPlayer();
     }
@@ -942,6 +960,67 @@ public class MainController implements Initializable {
         UIUtils.toggleStyleClass(btnRepeat, "control-active", on);
         if (focusedPlayer != null && focusedPlayer.panelRepeat != null)
             UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active", on);
+    }
+
+    private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed) {
+        if (canvas == null) return;
+        javafx.scene.canvas.GraphicsContext gc = canvas.getGraphicsContext2D();
+        double w = canvas.getWidth(), h = canvas.getHeight();
+        gc.clearRect(0, 0, w, h);
+        if (smoothed == null) return;
+
+        boolean isMini = (w <= 60); // mini canvas overlaid on thumbnail
+        double gap    = isMini ? 1.5 : 2.0;
+        double minBarW = isMini ? 2.5 : 4.0;
+        int n = smoothed.length;
+        int displayBars = Math.min(n, Math.max(2, (int)((w + gap) / (minBarW + gap))));
+        if (displayBars % 2 != 0) displayBars--;   // keep even for clean mirror
+        double barW = (w - gap * (displayBars - 1)) / displayBars;
+        int half = displayBars / 2;
+
+        // Semi-transparent overlay so bars are legible over the art thumbnail
+        if (isMini) {
+            gc.setFill(javafx.scene.paint.Color.rgb(15, 5, 25, 0.35));
+            gc.fillRect(0, 0, w, h);
+        }
+
+        for (int i = 0; i < displayBars; i++) {
+            // Mirror: distFromCenter=0 → bass (band 0, loudest), edge → treble
+            int dist = (i < half) ? (half - 1 - i) : (i - half);
+            int bandIdx = (half > 1) ? (int)((double) dist / (half - 1) * (n - 1)) : 0;
+            bandIdx = Math.max(0, Math.min(n - 1, bandIdx));
+            float energy = smoothed[bandIdx];
+            // Smooth with neighbour for visual continuity
+            if (bandIdx + 1 < n) energy = energy * 0.7f + smoothed[bandIdx + 1] * 0.3f;
+
+            double barH = Math.max(isMini ? 2.0 : 3.0, energy * h * 0.92);
+            double x = i * (barW + gap);
+            double y = (h - barH) / 2.0;
+
+            // Color: center = pink (bass), edges = purple (treble)
+            double t = (half > 1) ? (double) dist / (half - 1) : 0;
+            int r = (int)(244 - t * 64), g = (int)(167 - t * 27), b = (int)(185 + t * 35);
+            gc.setFill(javafx.scene.paint.Color.rgb(r, g, b, isMini ? 0.92 : 0.88));
+            gc.fillRoundRect(x, y, barW, barH, 3, 3);
+        }
+    }
+
+    private void startWaveDecay(PlayerInstance pi) {
+        if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
+        if (pi.waveSmoothed == null) return;
+        pi.waveDecayAnim = new Timeline(new KeyFrame(Duration.millis(33), e -> {
+            if (pi.waveSmoothed == null) { pi.waveDecayAnim.stop(); return; }
+            boolean allZero = true;
+            for (int i = 0; i < pi.waveSmoothed.length; i++) {
+                pi.waveSmoothed[i] *= 0.82f;
+                if (pi.waveSmoothed[i] > 0.004f) allZero = false;
+            }
+            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed);
+            if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
+            if (allZero) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
+        }));
+        pi.waveDecayAnim.setCycleCount(Animation.INDEFINITE);
+        pi.waveDecayAnim.play();
     }
 
     private void addGlowEffect() {
@@ -994,8 +1073,8 @@ public class MainController implements Initializable {
         }
         if (pi.mashupPartner == null && !pi.isMashupLinked &&
             Math.abs(volumeSlider.getValue() - pi.volume * 100) > 0.5) volumeSlider.setValue(pi.volume * 100);
-        if (pi.isPlaying) { vinylRotation.play(); addGlowEffect(); }
-        else              { vinylRotation.pause(); removeGlowEffect(); }
+        if (pi.isPlaying) addGlowEffect(); else removeGlowEffect();
+        drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
         updatePlayPauseButton(); updateLoopButtons();
     }
 
@@ -1014,7 +1093,7 @@ public class MainController implements Initializable {
     private void pickBestFocusedPlayer() {
         List<PlayerInstance> candidates = activePlayers.stream().filter(p -> !p.isMashupLinked).collect(Collectors.toList());
         if (candidates.isEmpty()) {
-            focusedPlayer = null; vinylRotation.pause(); removeGlowEffect();
+            focusedPlayer = null; removeGlowEffect();
             updatePlayPauseButton(); updateMiniPlayerVisibility(); return;
         }
         PlayerInstance best = null;
@@ -1025,8 +1104,7 @@ public class MainController implements Initializable {
         if (best != focusedPlayer) setFocusedPlayer(best);
         else {
             updatePlayPauseButton();
-            if (focusedPlayer.isPlaying) { vinylRotation.play(); addGlowEffect(); }
-            else                         { vinylRotation.pause(); removeGlowEffect(); }
+            if (focusedPlayer.isPlaying) addGlowEffect(); else removeGlowEffect();
         }
         updateMiniPlayerVisibility();
     }

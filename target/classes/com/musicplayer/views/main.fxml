@@ -3,6 +3,7 @@
 <?import javafx.scene.control.*?>
 <?import javafx.scene.image.*?>
 <?import javafx.scene.layout.*?>
+<?import javafx.scene.canvas.*?>
 <?import javafx.scene.shape.*?>
 <?import javafx.scene.text.*?>
 <?import javafx.geometry.*?>
@@ -165,11 +166,10 @@
         <HBox fx:id="nowPlayingBar" styleClass="now-playing-bar" alignment="CENTER" spacing="0">
 
             <!-- Song info -->
-            <HBox spacing="14" alignment="CENTER_LEFT" prefWidth="260" minWidth="200">
+            <HBox spacing="12" alignment="CENTER_LEFT" prefWidth="230" minWidth="200">
                 <StackPane fx:id="vinylContainer" styleClass="vinyl-container">
-                    <Circle radius="28" styleClass="vinyl-disc" />
-                    <Circle radius="8"  styleClass="vinyl-hole" />
-                    <ImageView fx:id="albumArt" fitWidth="56" fitHeight="56" styleClass="album-art" />
+                    <ImageView fx:id="albumArt" fitWidth="44" fitHeight="44" styleClass="album-art" />
+                    <Canvas fx:id="miniWaveCanvas" width="44" height="44" />
                 </StackPane>
                 <VBox spacing="3" alignment="CENTER_LEFT">
                     <Label fx:id="nowPlayingTitle"  text="Selecciona una canción"

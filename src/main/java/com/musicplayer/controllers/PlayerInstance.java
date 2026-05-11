@@ -4,6 +4,7 @@ import com.musicplayer.models.Song;
 import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.scene.canvas.Canvas;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.Slider;
@@ -52,7 +53,10 @@ public class PlayerInstance {
     public VBox      panel;
     public StackPane artStack;
     public ImageView artView;
-    public Timeline  waveAnim;
+    public Canvas    panelWaveCanvas;
+    public float[]   waveSmoothed;
+    public Timeline  waveDecayAnim;
+    public Timeline  waveAnim;      // kept for null-safe legacy refs; not used for real animation
     public Timeline  fadeOutAnim;
     public Label     panelTitle, panelArtist, panelElapsed, panelTotal;
     public Slider    panelProgress, panelVolumeSlider;

@@ -343,18 +343,11 @@
 /* Vinyl disc */
 .vinyl-container {
     -fx-alignment: CENTER;
-}
-.vinyl-disc {
-    -fx-fill: radial-gradient(center 50% 50%, radius 50%, #5a4a6a, #3a2a4a);
-    -fx-stroke: transparent;
-}
-.vinyl-hole {
-    -fx-fill: #f4f0c8;
-    -fx-stroke: transparent;
+    -fx-background-color: #ede8f5;
+    -fx-background-radius: 8px;
 }
 .album-art {
-    -fx-background-radius: 50%;
-    -fx-opacity: 0.7;
+    -fx-opacity: 1.0;
 }
 
 /* Now playing text */
@@ -1030,12 +1023,12 @@
 
 .player-art-container {
     -fx-background-color: #e8dff5;
-    -fx-background-radius: 100px;
+    -fx-background-radius: 16px;
     -fx-effect: dropshadow(gaussian, rgba(160,100,200,0.28), 24, 0.2, 0, 4);
 }
 
 .player-art-container.glow {
-    -fx-effect: dropshadow(gaussian, #f4a7b9, 32, 0.5, 0, 0);
+    -fx-effect: dropshadow(gaussian, #f4a7b9, 36, 0.55, 0, 0);
 }
 
 .wave-bar {
