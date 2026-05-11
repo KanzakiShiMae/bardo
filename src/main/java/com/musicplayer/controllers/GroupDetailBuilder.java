@@ -309,6 +309,24 @@ public final class GroupDetailBuilder {
         });
         row.getChildren().add(checklistBtn);
 
+        // Pin button
+        boolean[] pinned = {libraryService.isSongPinned(song.getVideoId())};
+        Button pinBtn = new Button(pinned[0] ? "📌" : "📍");
+        pinBtn.getStyleClass().add("row-pin-btn");
+        if (pinned[0]) pinBtn.getStyleClass().add("row-pin-btn-active");
+        pinBtn.setOnAction(e -> {
+            if (pinned[0]) {
+                libraryService.unpinSong(song.getVideoId());
+                pinned[0] = false; pinBtn.setText("📍");
+                pinBtn.getStyleClass().remove("row-pin-btn-active");
+            } else {
+                libraryService.pinSong(song);
+                pinned[0] = true; pinBtn.setText("📌");
+                pinBtn.getStyleClass().add("row-pin-btn-active");
+            }
+        });
+        row.getChildren().add(pinBtn);
+
         // Move arrows (±10 positions)
         Button upBtn   = new Button("↑"); upBtn.getStyleClass().add("row-move-btn");
         Button downBtn = new Button("↓"); downBtn.getStyleClass().add("row-move-btn");
@@ -382,6 +400,24 @@ public final class GroupDetailBuilder {
             menuRef[0].show(checklistBtn, Side.BOTTOM, 0, 0);
         });
         row.getChildren().add(checklistBtn);
+
+        // Pin button
+        boolean[] pinnedM = {libraryService.isSongPinned(song.getVideoId())};
+        Button pinBtnM = new Button(pinnedM[0] ? "📌" : "📍");
+        pinBtnM.getStyleClass().add("row-pin-btn");
+        if (pinnedM[0]) pinBtnM.getStyleClass().add("row-pin-btn-active");
+        pinBtnM.setOnAction(e -> {
+            if (pinnedM[0]) {
+                libraryService.unpinSong(song.getVideoId());
+                pinnedM[0] = false; pinBtnM.setText("📍");
+                pinBtnM.getStyleClass().remove("row-pin-btn-active");
+            } else {
+                libraryService.pinSong(song);
+                pinnedM[0] = true; pinBtnM.setText("📌");
+                pinBtnM.getStyleClass().add("row-pin-btn-active");
+            }
+        });
+        row.getChildren().add(pinBtnM);
 
         // Move arrows
         Button upBtn   = new Button("↑"); upBtn.getStyleClass().add("row-move-btn");

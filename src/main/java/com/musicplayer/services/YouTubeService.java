@@ -200,6 +200,66 @@ public class YouTubeService {
         return songs;
     }
 
+    // ── Fetch by ID (direct URL) ──────────────────────────────────────────────
+
+    public CompletableFuture<Song> getVideoById(String videoId) {
+        return CompletableFuture.supplyAsync(() -> {
+            String url = BASE_URL + "/videos"
+                + "?part=snippet,contentDetails"
+                + "&id=" + videoId
+                + "&key=" + apiKey;
+            String body = rawGet(url);
+            JsonObject root  = JsonParser.parseString(body).getAsJsonObject();
+            JsonArray  items = root.getAsJsonArray("items");
+            if (items == null || items.size() == 0) return null;
+            JsonObject obj     = items.get(0).getAsJsonObject();
+            JsonObject snippet = obj.getAsJsonObject("snippet");
+            String title    = snippet.get("title").getAsString();
+            String channel  = snippet.get("channelTitle").getAsString();
+            String thumb    = thumbUrl(snippet);
+            String duration = parseDuration(
+                obj.getAsJsonObject("contentDetails").get("duration").getAsString());
+            return new Song(videoId, title, channel, duration, thumb, channel);
+        });
+    }
+
+    public CompletableFuture<YouTubePlaylistInfo> getPlaylistById(String playlistId) {
+        return CompletableFuture.supplyAsync(() -> {
+            String url = BASE_URL + "/playlists"
+                + "?part=snippet,contentDetails"
+                + "&id=" + playlistId
+                + "&key=" + apiKey;
+            String body  = rawGet(url);
+            JsonObject root  = JsonParser.parseString(body).getAsJsonObject();
+            JsonArray  items = root.getAsJsonArray("items");
+            if (items == null || items.size() == 0) return null;
+            JsonObject obj     = items.get(0).getAsJsonObject();
+            JsonObject snippet = obj.getAsJsonObject("snippet");
+            String title   = snippet.get("title").getAsString();
+            String channel = snippet.get("channelTitle").getAsString();
+            String thumb   = thumbUrl(snippet);
+            String desc    = snippet.has("description") ? snippet.get("description").getAsString() : "";
+            int count = 0;
+            try { count = obj.getAsJsonObject("contentDetails").get("itemCount").getAsInt(); }
+            catch (Exception ignored) {}
+            YouTubePlaylistInfo info = new YouTubePlaylistInfo(playlistId, title, channel, thumb, desc);
+            info.setItemCount(count);
+            return info;
+        });
+    }
+
+    private String parseDuration(String iso) {
+        if (iso == null || iso.isEmpty()) return "—";
+        java.util.regex.Matcher m = java.util.regex.Pattern
+            .compile("PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?").matcher(iso);
+        if (!m.matches()) return "—";
+        int h   = m.group(1) != null ? Integer.parseInt(m.group(1)) : 0;
+        int min = m.group(2) != null ? Integer.parseInt(m.group(2)) : 0;
+        int sec = m.group(3) != null ? Integer.parseInt(m.group(3)) : 0;
+        return h > 0 ? String.format("%d:%02d:%02d", h, min, sec)
+                     : String.format("%d:%02d", min, sec);
+    }
+
     // ── HTTP helpers ──────────────────────────────────────────────────────────
 
     private <T> T fetch(String url, java.util.function.Function<String, T> parser) {

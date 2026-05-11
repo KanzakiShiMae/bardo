@@ -87,8 +87,7 @@ public class MainController implements Initializable {
     @FXML private StackPane vinylContainer;
     @FXML private javafx.scene.canvas.Canvas miniWaveCanvas;
 
-    @FXML private FlowPane featuredPane;
-    @FXML private Label    greetingLabel;
+    private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
 
     // ── State ─────────────────────────────────────────────────────────────────
     private boolean isShuffle, searchPlaylistMode, seekingByUser, titleBarDragging;
@@ -183,7 +182,7 @@ public class MainController implements Initializable {
             e.consume();
         });
 
-        loadDemoContent();
+        refreshHomePanel();
         animateEntrance();
         Platform.runLater(this::checkApiKey);
     }
@@ -347,7 +346,7 @@ public class MainController implements Initializable {
     }
 
     private void setupSidebarNavigation() {
-        btnHome.setOnAction(e     -> openTab("home",     "🏠", "Inicio",        homePanel,     true, btnHome));
+        btnHome.setOnAction(e     -> { refreshHomePanel(); openTab("home", "🏠", "Inicio", homePanel, true, btnHome); });
         btnLibrary.setOnAction(e  -> { refreshLibraryPanel(); openTab("library", "📚", "Biblioteca",   libraryPanel,  true, btnLibrary); });
         btnSettings.setOnAction(e -> openTab("settings", "⚙",  "Configuración", settingsPanel, true, btnSettings));
 
@@ -1126,6 +1125,7 @@ public class MainController implements Initializable {
      */
     private void downloadAndPlay(Song song, LibraryGroup group) {
         if (song.isLocal()) {
+            if (group != null) { group.incrementPlayCount(); libraryService.save(); }
             List<Song> q = group != null
                 ? group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList())
                 : List.of(song);
@@ -1145,6 +1145,7 @@ public class MainController implements Initializable {
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
                 song.setLocalFilePath(path.toString());
+                if (group != null) group.incrementPlayCount();
                 libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
                 List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
                 playSongInQueue(song, locals.isEmpty() ? List.of(song) : locals);
@@ -1170,6 +1171,15 @@ public class MainController implements Initializable {
 
     @FXML private void onSearchAction() {
         String query = searchField.getText().trim(); if (query.isEmpty()) return;
+
+        // ── Detect YouTube URL ────────────────────────────────────────────────
+        String videoId    = extractYouTubeVideoId(query);
+        String playlistId = extractYouTubePlaylistId(query);
+
+        if (playlistId != null) { fetchPlaylistByUrl(playlistId); return; }
+        if (videoId    != null) { fetchVideoByUrl(videoId);       return; }
+
+        // ── Normal text search ────────────────────────────────────────────────
         openTab("search", "🔍", "🔍 " + query, searchPanel, true, null);
         searchStatusLabel.setText("Buscando «" + query + "»…");
         searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
@@ -1192,10 +1202,54 @@ public class MainController implements Initializable {
                     if (songs.isEmpty()) { searchStatusLabel.setText("Sin resultados."); return; }
                     searchStatusLabel.setText(songs.size() + " resultados");
                     songs.forEach(s -> searchResultsPane.getChildren().add(
-                        CardBuilder.songCard(s, () -> downloadAndPlay(s, null), UIUtils::openInBrowser, this::showGroupSelector)));
+                        CardBuilder.songCard(s, () -> downloadAndPlay(s, null), UIUtils::openInBrowser, this::showGroupSelector, libraryService)));
                 }))
                 .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
         }
+    }
+
+    private String extractYouTubeVideoId(String input) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+            "(?:youtube\\.com/(?:watch\\?v=|shorts/|embed/)|youtu\\.be/)([a-zA-Z0-9_-]{11})"
+        ).matcher(input);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private String extractYouTubePlaylistId(String input) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+            "[?&]list=([a-zA-Z0-9_-]+)"
+        ).matcher(input);
+        return m.find() ? m.group(1) : null;
+    }
+
+    private void fetchVideoByUrl(String videoId) {
+        openTab("search", "🔍", "🔍 vídeo", searchPanel, true, null);
+        searchStatusLabel.setText("Obteniendo vídeo…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        youTubeService.getVideoById(videoId)
+            .thenAccept(song -> Platform.runLater(() -> {
+                searchSpinner.setVisible(false);
+                if (song == null) { searchStatusLabel.setText("Vídeo no encontrado."); return; }
+                searchStatusLabel.setText("1 resultado");
+                searchResultsPane.getChildren().add(
+                    CardBuilder.songCard(song, () -> downloadAndPlay(song, null), UIUtils::openInBrowser, this::showGroupSelector, libraryService));
+            }))
+            .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
+    }
+
+    private void fetchPlaylistByUrl(String playlistId) {
+        openTab("search", "🔍", "🔍 playlist", searchPanel, true, null);
+        searchStatusLabel.setText("Obteniendo playlist…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        youTubeService.getPlaylistById(playlistId)
+            .thenAccept(pl -> Platform.runLater(() -> {
+                searchSpinner.setVisible(false);
+                if (pl == null) { searchStatusLabel.setText("Playlist no encontrada."); return; }
+                searchStatusLabel.setText("1 playlist");
+                searchResultsPane.getChildren().add(
+                    CardBuilder.playlistCard(pl, () -> importPlaylistToLibrary(pl)));
+            }))
+            .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
     }
 
     @FXML private void onQuickSearchRecent()    { searchField.setText("top hits 2024");  onSearchAction(); }
@@ -1428,16 +1482,170 @@ public class MainController implements Initializable {
         new ParallelTransition(new ParallelTransition(fadeSide, slide), fadeMain).play();
     }
 
-    private void loadDemoContent() {
+    private void refreshHomePanel() {
+        homeCarouselTimelines.forEach(Timeline::stop);
+        homeCarouselTimelines.clear();
+        homePanel.getChildren().clear();
+        homePanel.setPadding(new javafx.geometry.Insets(28, 28, 28, 28));
+
         int hour = java.time.LocalTime.now().getHour();
-        greetingLabel.setText(hour < 12 ? "Buenos días ☀️" : hour < 18 ? "Buenas tardes 🌤" : "Buenas noches 🌙");
-        String[][] demos = {
-            {"Lo-fi Beats", "Relajante", "#fdd5e2"}, {"Pop Hits", "Energético", "#d5e8f4"},
-            {"Indie Chill", "Tranquilo",  "#f4f0c8"}, {"Jazz Café", "Atmosférico", "#d5f4e6"},
-            {"Acoustic",   "Acogedor",   "#f4dcd5"}, {"Electronic", "Moderno",    "#e5d5f4"},
-        };
-        for (String[] d : demos)
-            featuredPane.getChildren().add(CardBuilder.featuredCard(d[0], d[1], d[2], q -> { searchField.setText(q); onSearchAction(); }));
+        Label greeting = new Label(hour < 12 ? "Buenos días ☀️" : hour < 18 ? "Buenas tardes 🌤" : "Buenas noches 🌙");
+        greeting.getStyleClass().add("greeting");
+        Label sub = new Label("Tu música destacada");
+        sub.getStyleClass().add("greeting-sub");
+        homePanel.getChildren().add(new VBox(4, greeting, sub));
+
+        List<Song>         pinned = new java.util.ArrayList<>(libraryService.getPinnedSongs());
+        List<LibraryGroup> top    = libraryService.getGroups().stream()
+            .filter(g -> g.getPlayCount() >= 5)
+            .sorted(Comparator.comparingInt(LibraryGroup::getPlayCount).reversed())
+            .limit(3)
+            .collect(Collectors.toList());
+
+        if (pinned.isEmpty() && top.isEmpty()) {
+            Label hint = new Label(
+                "Aquí aparecerán tus canciones pineadas y tus colecciones más escuchadas.\n" +
+                "Pulsa 📌 en cualquier canción para pinearla, o reproduce canciones de una colección\n" +
+                "(se necesitan al menos 5 reproducciones para que aparezca).");
+            hint.setWrapText(true);
+            hint.getStyleClass().add("empty-library-hint");
+            VBox.setVgrow(hint, Priority.ALWAYS);
+            homePanel.getChildren().add(hint);
+            return;
+        }
+
+        ScrollPane scroll = new ScrollPane();
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.getStyleClass().add("results-scroll");
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+
+        VBox sections = new VBox(24);
+        sections.setPadding(new javafx.geometry.Insets(4, 0, 12, 0));
+
+        if (!pinned.isEmpty()) {
+            Label sectionLbl = new Label("CANCIONES PINEADAS");
+            sectionLbl.getStyleClass().add("sidebar-section-label");
+            javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
+            pinnedFlow.setAlignment(Pos.TOP_LEFT);
+            pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
+            sections.getChildren().addAll(sectionLbl, pinnedFlow);
+        }
+
+        if (!top.isEmpty()) {
+            Label sectionLbl = new Label("COLECCIONES MÁS ESCUCHADAS");
+            sectionLbl.getStyleClass().add("sidebar-section-label");
+            HBox topRow = new HBox(20);
+            topRow.setAlignment(Pos.CENTER_LEFT);
+            top.forEach(g -> topRow.getChildren().add(buildTopPlaylistCard(g)));
+            sections.getChildren().addAll(sectionLbl, topRow);
+        }
+
+        scroll.setContent(sections);
+        homePanel.getChildren().add(scroll);
+    }
+
+    private VBox buildTopPlaylistCard(LibraryGroup group) {
+        VBox card = new VBox(10);
+        card.getStyleClass().add("home-playlist-card");
+
+        List<String> thumbUrls = group.getSongs().stream()
+            .map(Song::getThumbnailUrl)
+            .filter(url -> url != null && !url.isBlank())
+            .distinct()
+            .collect(Collectors.toList());
+        Collections.shuffle(thumbUrls);
+
+        ImageView imgView = new ImageView();
+        imgView.setFitWidth(220); imgView.setFitHeight(220);
+        imgView.setPreserveRatio(false);
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(220, 220);
+        clip.setArcWidth(18); clip.setArcHeight(18);
+        imgView.setClip(clip);
+        imgView.setStyle("-fx-cursor: hand;");
+        imgView.setOnMouseClicked(e -> showGroupDetail(group));
+
+        if (!thumbUrls.isEmpty()) CardBuilder.loadImage(imgView, thumbUrls.get(0));
+
+        Button removeBtn = new Button("✕");
+        removeBtn.getStyleClass().add("home-overlay-btn");
+        removeBtn.setOpacity(0);
+        StackPane.setAlignment(removeBtn, Pos.TOP_RIGHT);
+        StackPane.setMargin(removeBtn, new javafx.geometry.Insets(7, 7, 0, 0));
+        removeBtn.setOnAction(e -> { group.setPlayCount(0); libraryService.save(); refreshHomePanel(); });
+
+        StackPane imgContainer = new StackPane(imgView, removeBtn);
+        imgContainer.setPrefSize(220, 220); imgContainer.setMaxSize(220, 220);
+        imgContainer.getStyleClass().add("home-playlist-thumb");
+        imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), removeBtn); ft.setToValue(1); ft.play(); });
+        imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), removeBtn); ft.setToValue(0); ft.play(); });
+
+        if (thumbUrls.size() > 1) {
+            int[] idx = {0};
+            Timeline slider = new Timeline(new KeyFrame(Duration.seconds(5), e -> {
+                idx[0] = (idx[0] + 1) % thumbUrls.size();
+                FadeTransition out = new FadeTransition(Duration.millis(400), imgView);
+                out.setFromValue(1); out.setToValue(0);
+                out.setOnFinished(ev -> {
+                    CardBuilder.loadImage(imgView, thumbUrls.get(idx[0]));
+                    FadeTransition in = new FadeTransition(Duration.millis(400), imgView);
+                    in.setFromValue(0); in.setToValue(1); in.play();
+                });
+                out.play();
+            }));
+            slider.setCycleCount(Animation.INDEFINITE);
+            slider.play();
+            homeCarouselTimelines.add(slider);
+        }
+
+        Label nameLbl = new Label(group.getName());
+        nameLbl.getStyleClass().add("home-playlist-name");
+        nameLbl.setMaxWidth(220);
+
+        Label countLbl = new Label(group.getPlayCount() + " reproducciones");
+        countLbl.getStyleClass().add("home-playlist-count");
+
+        card.getChildren().addAll(imgContainer, nameLbl, countLbl);
+        return card;
+    }
+
+    private VBox buildPinnedSongCard(Song song) {
+        VBox card = new VBox(10);
+        card.getStyleClass().add("home-playlist-card");
+
+        ImageView imgView = new ImageView();
+        imgView.setFitWidth(220); imgView.setFitHeight(220);
+        imgView.setPreserveRatio(false);
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(220, 220);
+        clip.setArcWidth(18); clip.setArcHeight(18);
+        imgView.setClip(clip);
+        imgView.setStyle("-fx-cursor: hand;");
+        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
+            CardBuilder.loadImage(imgView, song.getThumbnailUrl());
+        imgView.setOnMouseClicked(e -> downloadAndPlay(song, null));
+
+        Button unpinBtn = new Button("📌");
+        unpinBtn.getStyleClass().add("home-overlay-btn");
+        unpinBtn.setOpacity(0);
+        StackPane.setAlignment(unpinBtn, Pos.TOP_RIGHT);
+        StackPane.setMargin(unpinBtn, new javafx.geometry.Insets(7, 7, 0, 0));
+        unpinBtn.setOnAction(e -> { libraryService.unpinSong(song.getVideoId()); refreshHomePanel(); });
+
+        StackPane imgContainer = new StackPane(imgView, unpinBtn);
+        imgContainer.setPrefSize(220, 220); imgContainer.setMaxSize(220, 220);
+        imgContainer.getStyleClass().add("home-playlist-thumb");
+        imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(1); ft.play(); });
+        imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(0); ft.play(); });
+
+        Label titleLbl = new Label(song.getTitle());
+        titleLbl.getStyleClass().add("home-playlist-name");
+        titleLbl.setMaxWidth(220);
+
+        Label artistLbl = new Label(song.getArtist());
+        artistLbl.getStyleClass().add("home-playlist-count");
+
+        card.getChildren().addAll(imgContainer, titleLbl, artistLbl);
+        return card;
     }
 
     // ── Keyboard shortcuts ────────────────────────────────────────────────────

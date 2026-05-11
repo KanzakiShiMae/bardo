@@ -82,36 +82,8 @@
                 </ScrollPane>
                 <StackPane fx:id="contentArea" VBox.vgrow="ALWAYS" styleClass="content-area">
 
-                <!-- HOME PANEL -->
-                <VBox fx:id="homePanel" styleClass="panel" spacing="24" visible="true">
-                    <padding><Insets top="28" right="28" bottom="28" left="28" /></padding>
-
-                    <VBox spacing="4">
-                        <Label fx:id="greetingLabel" styleClass="greeting" text="Buenas noches 🌙" />
-                        <Label text="¿Qué quieres escuchar hoy?" styleClass="greeting-sub" />
-                    </VBox>
-
-                    <VBox spacing="12">
-                        <Label text="Accesos rápidos" styleClass="section-title" />
-                        <HBox spacing="12">
-                            <VBox styleClass="quick-card, quick-pink"   onMouseClicked="#onQuickSearchRecent">
-                                <Label text="🎵" styleClass="quick-icon" /><Label text="Recientes"  styleClass="quick-label" /></VBox>
-                            <VBox styleClass="quick-card, quick-blue"   onMouseClicked="#onQuickSearchFavorites">
-                                <Label text="❤️" styleClass="quick-icon" /><Label text="Favoritos"  styleClass="quick-label" /></VBox>
-                            <VBox styleClass="quick-card, quick-yellow" onMouseClicked="#onQuickSearchRadio">
-                                <Label text="📻" styleClass="quick-icon" /><Label text="Radio"      styleClass="quick-label" /></VBox>
-                            <VBox styleClass="quick-card, quick-green"  onMouseClicked="#onQuickSearchNew">
-                                <Label text="✨" styleClass="quick-icon" /><Label text="Descubrir"  styleClass="quick-label" /></VBox>
-                        </HBox>
-                    </VBox>
-
-                    <VBox spacing="12" VBox.vgrow="ALWAYS">
-                        <Label text="Géneros destacados" styleClass="section-title" />
-                        <ScrollPane styleClass="featured-scroll" fitToWidth="true" VBox.vgrow="ALWAYS">
-                            <FlowPane fx:id="featuredPane" styleClass="featured-pane" hgap="16" vgap="16" prefWrapLength="600" />
-                        </ScrollPane>
-                    </VBox>
-                </VBox>
+                <!-- HOME PANEL — content built dynamically in MainController.refreshHomePanel() -->
+                <VBox fx:id="homePanel" styleClass="panel" spacing="24" visible="true" />
 
                 <!-- SEARCH PANEL -->
                 <VBox fx:id="searchPanel" styleClass="panel" spacing="16" visible="false" managed="false">

@@ -94,17 +94,32 @@ public class PersistenceService {
     private static class GroupDto {
         String  id, name, thumbnailUrl, youtubePlaylistId, description, type;
         boolean youtubePlaylist;
+        int     playCount = 0;
         List<SongDto> songs = new ArrayList<>();
     }
 
     private static class LibraryDto {
         List<GroupDto> groups = new ArrayList<>();
+        List<SongDto>  pinnedSongs = new ArrayList<>();
     }
 
     // ── Save ─────────────────────────────────────────────────────────────────
 
-    public void save(List<LibraryGroup> groups) {
+    public void save(List<LibraryGroup> groups, List<Song> pinnedSongs) {
         LibraryDto dto = new LibraryDto();
+        if (pinnedSongs != null) {
+            for (Song s : pinnedSongs) {
+                SongDto sd = new SongDto();
+                sd.videoId       = s.getVideoId();
+                sd.title         = s.getTitle();
+                sd.artist        = s.getArtist();
+                sd.duration      = s.getDuration();
+                sd.thumbnailUrl  = s.getThumbnailUrl();
+                sd.channelName   = s.getChannelName();
+                sd.localFilePath = s.getLocalFilePath();
+                dto.pinnedSongs.add(sd);
+            }
+        }
         for (LibraryGroup g : groups) {
             GroupDto gd = new GroupDto();
             gd.id               = g.getId();
@@ -114,6 +129,7 @@ public class PersistenceService {
             gd.youtubePlaylistId = g.getYoutubePlaylistId();
             gd.description      = g.getDescription();
             gd.type             = g.getType();
+            gd.playCount        = g.getPlayCount();
             for (Song s : g.getSongs()) {
                 SongDto sd = new SongDto();
                 sd.videoId       = s.getVideoId();
@@ -164,12 +180,26 @@ public class PersistenceService {
                     }
                 }
                 group.setType(gd.type != null ? gd.type : "Música");
+                group.setPlayCount(gd.playCount);
                 result.add(group);
             }
         } catch (Exception e) {
             System.err.println("Error cargando biblioteca: " + e.getMessage());
         }
         return result;
+    }
+
+    public List<Song> loadPinnedSongs() {
+        if (!Files.exists(SAVE_FILE)) return new ArrayList<>();
+        try {
+            LibraryDto dto = gson.fromJson(Files.readString(SAVE_FILE), LibraryDto.class);
+            if (dto == null || dto.pinnedSongs == null) return new ArrayList<>();
+            List<Song> result = new ArrayList<>();
+            for (SongDto sd : dto.pinnedSongs)
+                result.add(new Song(orEmpty(sd.videoId), orEmpty(sd.title), orEmpty(sd.artist),
+                    orEmpty(sd.duration), sd.thumbnailUrl, orEmpty(sd.channelName), sd.localFilePath));
+            return result;
+        } catch (Exception e) { return new ArrayList<>(); }
     }
 
     private static String orEmpty(String s) { return s != null ? s : ""; }

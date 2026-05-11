@@ -7,23 +7,22 @@ import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.util.Duration;
+import java.util.List;
 
 public class LibraryService {
 
     private static LibraryService instance;
 
-    private final ObservableList<LibraryGroup> groups = FXCollections.observableArrayList();
+    private final ObservableList<LibraryGroup> groups      = FXCollections.observableArrayList();
+    private final ObservableList<Song>         pinnedSongs = FXCollections.observableArrayList();
     private final PersistenceService persistence = new PersistenceService();
     private PauseTransition savePause;
 
     private LibraryService() {
-        // Cargar biblioteca guardada al iniciar
-        persistence.load().forEach(g -> {
-            groups.add(g);
-            watchGroup(g);
-        });
-        // Guardar cuando se añade o elimina un grupo
+        persistence.load().forEach(g -> { groups.add(g); watchGroup(g); });
+        pinnedSongs.addAll(persistence.loadPinnedSongs());
         groups.addListener((ListChangeListener<LibraryGroup>) c -> debouncedSave());
+        pinnedSongs.addListener((ListChangeListener<Song>) c -> debouncedSave());
     }
 
     public static LibraryService getInstance() {
@@ -58,7 +57,12 @@ public class LibraryService {
 
     public void addSongToGroup(Song song, LibraryGroup group) { group.addSong(song); }
 
-    public void save() { persistence.save(groups); }
+    public void save() { persistence.save(groups, pinnedSongs); }
+
+    public ObservableList<Song> getPinnedSongs() { return pinnedSongs; }
+    public boolean isSongPinned(String videoId)  { return pinnedSongs.stream().anyMatch(s -> s.getVideoId().equals(videoId)); }
+    public void pinSong(Song song)               { if (!isSongPinned(song.getVideoId())) pinnedSongs.add(song); }
+    public void unpinSong(String videoId)        { pinnedSongs.removeIf(s -> s.getVideoId().equals(videoId)); }
 
     public int  loadVolume()           { return persistence.loadVolume(); }
     public void saveVolume(int pct)    { persistence.saveVolume(pct); }
@@ -71,7 +75,7 @@ public class LibraryService {
     private void debouncedSave() {
         if (savePause == null) {
             savePause = new PauseTransition(Duration.millis(600));
-            savePause.setOnFinished(e -> persistence.save(groups));
+            savePause.setOnFinished(e -> persistence.save(groups, pinnedSongs));
         }
         savePause.playFromStart();
     }

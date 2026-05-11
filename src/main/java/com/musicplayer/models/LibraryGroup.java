@@ -15,6 +15,7 @@ public class LibraryGroup {
     private final StringProperty description;
     private final StringProperty type = new SimpleStringProperty("Música");
     private final ObservableList<Song> songs = FXCollections.observableArrayList();
+    private int playCount = 0;
 
     public static LibraryGroup createCustom(String name) {
         return new LibraryGroup(UUID.randomUUID().toString(), name, null, false, null, "");
@@ -56,6 +57,10 @@ public class LibraryGroup {
         type.set(t != null ? t : "Música");
         songs.forEach(s -> s.setType(type.get()));
     }
+
+    public int  getPlayCount()       { return playCount; }
+    public void setPlayCount(int c)  { this.playCount = c; }
+    public void incrementPlayCount() { this.playCount++; }
 
     public void addSong(Song s) {
         if (songs.stream().noneMatch(x -> x.getVideoId().equals(s.getVideoId()))) {

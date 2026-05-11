@@ -2,6 +2,7 @@ package com.musicplayer.controllers;
 
 import com.musicplayer.models.Song;
 import com.musicplayer.models.YouTubePlaylistInfo;
+import com.musicplayer.services.LibraryService;
 import javafx.animation.*;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -35,7 +36,8 @@ public final class CardBuilder {
      * @param onAdd     acción del botón ＋ — recibe la canción y el nodo ancla
      */
     public static VBox songCard(Song song, Runnable onPlay,
-                                Consumer<String> onBrowser, BiConsumer<Song, Node> onAdd) {
+                                Consumer<String> onBrowser, BiConsumer<Song, Node> onAdd,
+                                LibraryService libraryService) {
         VBox card = new VBox(6);
         card.getStyleClass().add("song-card");
 
@@ -60,6 +62,25 @@ public final class CardBuilder {
         Button addBtn = new Button("＋"); addBtn.getStyleClass().add("add-to-lib-btn");
         addBtn.setOnAction(e -> { e.consume(); onAdd.accept(song, addBtn); });
         HBox bottomRow = new HBox(6, ytBadge, linkBtn, addBtn); bottomRow.setAlignment(Pos.CENTER_LEFT);
+        if (libraryService != null) {
+            boolean[] pinned = {libraryService.isSongPinned(song.getVideoId())};
+            Button pinBtn = new Button(pinned[0] ? "📌" : "📍");
+            pinBtn.getStyleClass().add("pin-card-btn");
+            if (pinned[0]) pinBtn.getStyleClass().add("pin-card-btn-active");
+            pinBtn.setOnAction(e -> {
+                e.consume();
+                if (pinned[0]) {
+                    libraryService.unpinSong(song.getVideoId());
+                    pinned[0] = false; pinBtn.setText("📍");
+                    pinBtn.getStyleClass().remove("pin-card-btn-active");
+                } else {
+                    libraryService.pinSong(song);
+                    pinned[0] = true; pinBtn.setText("📌");
+                    pinBtn.getStyleClass().add("pin-card-btn-active");
+                }
+            });
+            bottomRow.getChildren().add(pinBtn);
+        }
 
         card.getChildren().addAll(thumbStack, titleLbl, channelLbl, bottomRow);
         hoverLift(card, overlay);

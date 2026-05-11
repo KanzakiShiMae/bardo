@@ -286,6 +286,77 @@
     -fx-text-fill: #9080a0;
 }
 
+/* ── Home top-playlist / pinned-song cards ────────────── */
+.home-playlist-card {
+    -fx-alignment: TOP_LEFT;
+    -fx-cursor: default;
+}
+
+.home-playlist-thumb {
+    -fx-background-color: #e8e0f4;
+    -fx-background-radius: 18px;
+    -fx-effect: dropshadow(gaussian, rgba(140,110,170,0.18), 14, 0, 0, 5);
+}
+.home-playlist-thumb:hover {
+    -fx-effect: dropshadow(gaussian, rgba(244,167,185,0.45), 22, 0, 0, 8);
+}
+
+.home-playlist-name {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #5a4a6a;
+}
+.home-playlist-count {
+    -fx-font-size: 12px;
+    -fx-text-fill: #a890c0;
+}
+
+/* Overlay dismiss/unpin button on home cards */
+.home-overlay-btn {
+    -fx-background-color: rgba(30, 10, 40, 0.62);
+    -fx-text-fill: white;
+    -fx-background-radius: 50%;
+    -fx-font-size: 11px;
+    -fx-min-width: 24px;
+    -fx-min-height: 24px;
+    -fx-max-width: 24px;
+    -fx-max-height: 24px;
+    -fx-padding: 0;
+    -fx-border-width: 0;
+    -fx-cursor: hand;
+}
+.home-overlay-btn:hover {
+    -fx-background-color: rgba(232, 114, 154, 0.85);
+}
+
+/* Pin buttons in song rows */
+.row-pin-btn {
+    -fx-background-color: transparent;
+    -fx-text-fill: #c0b0d0;
+    -fx-font-size: 14px;
+    -fx-padding: 2 4 2 4;
+    -fx-background-radius: 6px;
+    -fx-border-width: 0;
+    -fx-cursor: hand;
+    -fx-min-width: 28px;
+    -fx-min-height: 28px;
+}
+.row-pin-btn:hover { -fx-background-color: #f0ebf8; }
+.row-pin-btn-active { -fx-text-fill: #e8729a; }
+
+/* Pin button on search / song cards */
+.pin-card-btn {
+    -fx-background-color: transparent;
+    -fx-text-fill: #c0b0d0;
+    -fx-font-size: 14px;
+    -fx-padding: 0 4 0 4;
+    -fx-background-radius: 6px;
+    -fx-border-width: 0;
+    -fx-cursor: hand;
+}
+.pin-card-btn:hover { -fx-background-color: #f4eff8; }
+.pin-card-btn-active { -fx-text-fill: #e8729a; }
+
 /* ── Search results ───────────────────────────────────── */
 .results-scroll {
     -fx-background-color: transparent;
