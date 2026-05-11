@@ -1,0 +1,245 @@
+package com.musicplayer.services;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.musicplayer.models.Song;
+import com.musicplayer.models.YouTubePlaylistInfo;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+public class YouTubeService {
+
+    private static final String BASE_URL = "https://www.googleapis.com/youtube/v3";
+    private final String apiKey;
+    private final OkHttpClient http;
+
+    public YouTubeService(String apiKey) {
+        this.apiKey = apiKey;
+        this.http = new OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build();
+    }
+
+    // ── Video search ──────────────────────────────────────────────────────────
+
+    public CompletableFuture<ObservableList<Song>> search(String query, int maxResults) {
+        return CompletableFuture.supplyAsync(() -> {
+            String url = BASE_URL + "/search"
+                + "?part=snippet"
+                + "&type=video"
+                + "&videoCategoryId=10"
+                + "&q=" + encode(query)
+                + "&maxResults=" + maxResults
+                + "&key=" + apiKey;
+            return fetch(url, this::parseVideoSearchResults);
+        });
+    }
+
+    // ── Playlist search ───────────────────────────────────────────────────────
+
+    public CompletableFuture<ObservableList<YouTubePlaylistInfo>> searchPlaylists(String query, int maxResults) {
+        return CompletableFuture.supplyAsync(() -> {
+            String url = BASE_URL + "/search"
+                + "?part=snippet"
+                + "&type=playlist"
+                + "&q=" + encode(query)
+                + "&maxResults=" + maxResults
+                + "&key=" + apiKey;
+
+            String body = rawGet(url);
+            List<YouTubePlaylistInfo> playlists = parsePlaylistSearchResults(body);
+
+            // Batch-fetch item counts
+            if (!playlists.isEmpty()) {
+                String ids = playlists.stream()
+                    .map(YouTubePlaylistInfo::getPlaylistId)
+                    .collect(Collectors.joining(","));
+                String countUrl = BASE_URL + "/playlists"
+                    + "?part=contentDetails"
+                    + "&id=" + ids
+                    + "&key=" + apiKey;
+
+                try {
+                    String countBody = rawGet(countUrl);
+                    Map<String, Integer> counts = parseItemCounts(countBody);
+                    playlists.forEach(p -> {
+                        Integer c = counts.get(p.getPlaylistId());
+                        if (c != null) p.setItemCount(c);
+                    });
+                } catch (RuntimeException ignored) {}
+            }
+
+            return FXCollections.observableArrayList(playlists);
+        });
+    }
+
+    // ── Playlist items (all pages) ────────────────────────────────────────────
+
+    public CompletableFuture<ObservableList<Song>> getPlaylistItems(String playlistId) {
+        return CompletableFuture.supplyAsync(() -> {
+            ObservableList<Song> all = FXCollections.observableArrayList();
+            String pageToken = null;
+
+            do {
+                String url = BASE_URL + "/playlistItems"
+                    + "?part=snippet,contentDetails"
+                    + "&maxResults=50"
+                    + "&playlistId=" + playlistId
+                    + "&key=" + apiKey
+                    + (pageToken != null ? "&pageToken=" + pageToken : "");
+
+                String body = rawGet(url);
+                JsonObject root = JsonParser.parseString(body).getAsJsonObject();
+                all.addAll(parsePlaylistItems(root.toString()));
+
+                pageToken = root.has("nextPageToken")
+                    ? root.get("nextPageToken").getAsString()
+                    : null;
+
+            } while (pageToken != null);
+
+            return all;
+        });
+    }
+
+    // ── Parsing helpers ───────────────────────────────────────────────────────
+
+    private ObservableList<Song> parseVideoSearchResults(String json) {
+        ObservableList<Song> songs = FXCollections.observableArrayList();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        JsonArray items = root.getAsJsonArray("items");
+
+        for (JsonElement el : items) {
+            JsonObject obj = el.getAsJsonObject();
+            JsonObject id = obj.getAsJsonObject("id");
+            if (!id.has("videoId")) continue;
+
+            JsonObject snippet = obj.getAsJsonObject("snippet");
+            String videoId = id.get("videoId").getAsString();
+            String title   = snippet.get("title").getAsString();
+            String channel = snippet.get("channelTitle").getAsString();
+            String thumb   = thumbUrl(snippet);
+
+            songs.add(new Song(videoId, title, channel, "—", thumb, channel));
+        }
+        return songs;
+    }
+
+    private List<YouTubePlaylistInfo> parsePlaylistSearchResults(String json) {
+        List<YouTubePlaylistInfo> list = new ArrayList<>();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        JsonArray items = root.getAsJsonArray("items");
+
+        for (JsonElement el : items) {
+            JsonObject obj = el.getAsJsonObject();
+            JsonObject id = obj.getAsJsonObject("id");
+            if (!id.has("playlistId")) continue;
+
+            JsonObject snippet = obj.getAsJsonObject("snippet");
+            String playlistId = id.get("playlistId").getAsString();
+            String title      = snippet.get("title").getAsString();
+            String channel    = snippet.get("channelTitle").getAsString();
+            String thumb      = thumbUrl(snippet);
+            String desc       = snippet.has("description") ? snippet.get("description").getAsString() : "";
+
+            list.add(new YouTubePlaylistInfo(playlistId, title, channel, thumb, desc));
+        }
+        return list;
+    }
+
+    private Map<String, Integer> parseItemCounts(String json) {
+        Map<String, Integer> map = new HashMap<>();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        JsonArray items = root.getAsJsonArray("items");
+
+        for (JsonElement el : items) {
+            JsonObject obj = el.getAsJsonObject();
+            String id = obj.get("id").getAsString();
+            int count = obj.getAsJsonObject("contentDetails")
+                .get("itemCount").getAsInt();
+            map.put(id, count);
+        }
+        return map;
+    }
+
+    private ObservableList<Song> parsePlaylistItems(String json) {
+        ObservableList<Song> songs = FXCollections.observableArrayList();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        JsonArray items = root.getAsJsonArray("items");
+
+        for (JsonElement el : items) {
+            JsonObject obj     = el.getAsJsonObject();
+            JsonObject snippet = obj.getAsJsonObject("snippet");
+            if (!snippet.has("resourceId")) continue;
+
+            JsonObject resourceId = snippet.getAsJsonObject("resourceId");
+            if (!"youtube#video".equals(resourceId.get("kind").getAsString())) continue;
+
+            String videoId = resourceId.get("videoId").getAsString();
+            String title   = snippet.get("title").getAsString();
+            String channel = snippet.get("channelTitle").getAsString();
+            String thumb   = thumbUrl(snippet);
+
+            songs.add(new Song(videoId, title, channel, "—", thumb, channel));
+        }
+        return songs;
+    }
+
+    // ── HTTP helpers ──────────────────────────────────────────────────────────
+
+    private <T> T fetch(String url, java.util.function.Function<String, T> parser) {
+        try {
+            String body = rawGet(url);
+            return parser.apply(body);
+        } catch (RuntimeException e) {
+            System.err.println("YouTube API error (fetch): " + e.getMessage());
+            return parser.apply("{\"items\":[]}");
+        }
+    }
+
+    // Throws RuntimeException with the HTTP error body on non-2xx responses.
+    private String rawGet(String url) {
+        Request req = new Request.Builder().url(url).build();
+        try (Response resp = http.newCall(req).execute()) {
+            String body = resp.body() != null ? resp.body().string() : null;
+            if (!resp.isSuccessful()) {
+                String snippet = body != null ? body.substring(0, Math.min(300, body.length())) : "(empty)";
+                throw new RuntimeException("HTTP " + resp.code() + ": " + snippet);
+            }
+            return body != null ? body : "{\"items\":[]}";
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private String thumbUrl(JsonObject snippet) {
+        try {
+            JsonObject thumbnails = snippet.getAsJsonObject("thumbnails");
+            if (thumbnails.has("medium"))
+                return thumbnails.getAsJsonObject("medium").get("url").getAsString();
+            if (thumbnails.has("default"))
+                return thumbnails.getAsJsonObject("default").get("url").getAsString();
+        } catch (Exception ignored) {}
+        return "";
+    }
+
+    private String encode(String value) {
+        try { return java.net.URLEncoder.encode(value, "UTF-8"); }
+        catch (Exception e) { return value; }
+    }
+}

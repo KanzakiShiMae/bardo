@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(java -version 2>&1)",
+      "PowerShell(Get-Command mvn -ErrorAction SilentlyContinue)",
+      "PowerShell($env:JAVA_HOME)",
+      "Bash(powershell -Command \"Get-Content 'C:\\\\Users\\\\CARMEN~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Carmen-Pc-Desktop-app\\\\541c5540-053a-4c36-bce6-d9309f85a3bd\\\\tasks\\\\b6rz4ffa8.output' -Wait | Select-String 'BUILD SUCCESS|BUILD FAILURE|Exception|Error'\")"
+    ]
+  }
+}

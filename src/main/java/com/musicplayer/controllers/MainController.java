@@ -1,0 +1,1460 @@
+package com.musicplayer.controllers;
+
+import com.musicplayer.models.LibraryGroup;
+import com.musicplayer.models.Song;
+import com.musicplayer.models.YouTubePlaylistInfo;
+import com.musicplayer.services.ConfigLoader;
+import com.musicplayer.services.DownloadService;
+import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.YouTubeService;
+import javafx.animation.*;
+import javafx.application.Platform;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.fxml.FXML;
+import javafx.fxml.Initializable;
+import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
+import javafx.scene.layout.*;
+import javafx.scene.media.Media;
+import javafx.scene.media.MediaPlayer;
+import javafx.scene.shape.Circle;
+import javafx.stage.DirectoryChooser;
+import javafx.util.Duration;
+
+import java.io.File;
+import java.net.URL;
+import java.util.*;
+import java.util.stream.Collectors;
+
+/**
+ * Controlador principal de la aplicación.
+ *
+ * <p>Actúa como coordinador central: gestiona el sistema de pestañas, el reproductor
+ * activo enfocado, la búsqueda en YouTube, la biblioteca local y la descarga de audio.
+ *
+ * <p><b>Multi-reproductor:</b> cada canción que se reproduce abre una nueva
+ * {@link PlayerInstance} con su propio {@code MediaPlayer} y panel completo. El
+ * reproductor enfocado ({@code focusedPlayer}) es el que controla la barra inferior
+ * "Now Playing". Se puede cambiar el foco con el botón {@code ⇆} o activando la
+ * pestaña correspondiente.
+ *
+ * <p><b>Bucle manual:</b> {@code cycleCount} siempre es 1. El bucle se gestiona en
+ * {@code setOnEndOfMedia}: si {@code pi.looping == true} se hace seek a cero y se
+ * vuelve a llamar a {@code play()}; de lo contrario se llama a {@link #onSongEnded}.
+ *
+ * <p><b>Ventana redimensionable:</b> aunque el stage usa {@code UNDECORATED}, el
+ * {@link ResizeHelper} añade redimensionado mediante detectores de borde. El arrastre
+ * de la barra de título cede prioridad cuando el cursor está en la zona de borde.
+ * Doble clic en la barra de título o el botón verde maximiza/restaura. {@code F11}
+ * alterna el modo pantalla completa.
+ */
+public class MainController implements Initializable {
+
+    // ── FXML fields ───────────────────────────────────────────────────────────
+    @FXML private HBox   titleBar;
+    @FXML private Button btnClose, btnMinimize, btnMaximize;
+
+    @FXML private VBox             sidebar;
+    @FXML private Button           btnHome, btnLibrary, btnSettings, btnNewGroup;
+    @FXML private ListView<String> groupListView;
+
+    @FXML private ScrollPane tabBarScroll;
+    @FXML private HBox       tabBar;
+
+    @FXML private StackPane contentArea;
+    @FXML private VBox      homePanel, searchPanel, libraryPanel, settingsPanel;
+
+    @FXML private TextField         searchField;
+    @FXML private Button            btnSearchGo, btnSearchVideos, btnSearchPlaylists;
+    @FXML private FlowPane          searchResultsPane;
+    @FXML private Label             searchStatusLabel;
+    @FXML private ProgressIndicator searchSpinner;
+
+    @FXML private VBox libraryGroupsContainer;
+
+    @FXML private HBox      nowPlayingBar;
+    @FXML private ImageView albumArt;
+    @FXML private Label     nowPlayingTitle, nowPlayingArtist;
+    @FXML private Button    btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat, btnVolume;
+    @FXML private Slider    progressSlider, volumeSlider;
+    @FXML private Label     timeElapsed, timeTotal, volumeLabel;
+    @FXML private StackPane vinylContainer;
+
+    @FXML private FlowPane featuredPane;
+    @FXML private Label    greetingLabel;
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    private boolean isShuffle, searchPlaylistMode, seekingByUser, titleBarDragging;
+    private double  windowX, windowY;
+
+    private ResizeHelper     resizeHelper;
+    private RotateTransition vinylRotation;
+    private Timeline         globalProgressTimer;
+    private PauseTransition  volumeSavePause;
+    private javafx.stage.Popup toastPopup;
+    private SequentialTransition toastAnim;
+
+    private YouTubeService  youTubeService;
+    private LibraryService  libraryService;
+    private DownloadService downloadService;
+
+    private final Set<String>        downloadingNow = new HashSet<>();
+    private final List<AppTab>       openTabs       = new ArrayList<>();
+    private final List<PlayerInstance> activePlayers = new ArrayList<>();
+    private AppTab         activeTab;
+    private PlayerInstance focusedPlayer;
+
+    // Ambient ducking
+    private double ambientDuckRatio = 0.60;
+    private PauseTransition ambientDuckSavePause;
+
+    // Tab drag-reorder state
+    private AppTab  tabDragging;
+    private double  tabDragStartX;
+    private int     tabDragOrigIdx;
+    private int     tabDragTargetIdx;
+    private boolean tabDragActive;   // true only after crossing the movement threshold
+    private boolean tabJustDragged;
+
+    // ── Initialize ────────────────────────────────────────────────────────────
+
+    @Override
+    public void initialize(URL url, ResourceBundle rb) {
+        libraryService  = LibraryService.getInstance();
+        String apiKey   = libraryService.loadYouTubeApiKey();
+        if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
+        youTubeService  = new YouTubeService(apiKey);
+        downloadService = new DownloadService();
+
+        setupTitleBar();
+        setupWindowDrag();
+        setupVinylAnimation();
+        setupProgressSlider();
+        setupVolumeSlider();
+        volumeSlider.setValue(libraryService.loadVolume());
+        setupSidebarNavigation();
+        setupSettingsPanel();
+        ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
+        applyCircularClip();
+
+        btnPlayPause.setOnAction(e -> { if (focusedPlayer != null) togglePlayInstance(focusedPlayer); });
+        btnShuffle.setOnAction(e   -> toggleShuffle());
+        btnRepeat.setOnAction(e    -> toggleRepeat());
+        btnPrev.setOnAction(e      -> playPrevInInstance(focusedPlayer));
+        btnNext.setOnAction(e      -> playNextInInstance(focusedPlayer));
+
+        nowPlayingBar.setVisible(false); nowPlayingBar.setManaged(false);
+        contentArea.sceneProperty().addListener((obs, old, scene) -> {
+            if (scene == null) return;
+            scene.addEventFilter(KeyEvent.KEY_PRESSED, this::onGlobalKey);
+            // Attach resize helper and store stage reference once the window is known
+            scene.windowProperty().addListener((obs2, old2, win) -> {
+                if (win instanceof javafx.stage.Stage st) {
+                    resizeHelper = ResizeHelper.attach(st, scene);
+                    syncMaximizeIcon(st);
+                    st.maximizedProperty().addListener((o, wasMax, isMax) -> syncMaximizeIcon(st));
+                    st.fullScreenProperty().addListener((o, was, isFull) -> syncMaximizeIcon(st));
+                }
+            });
+        });
+
+        globalProgressTimer = new Timeline(new KeyFrame(Duration.millis(200), e -> {
+            for (PlayerInstance pi : new ArrayList<>(activePlayers)) {
+                if (pi.mediaPlayer == null || !pi.isPlaying) continue;
+                Duration cur = pi.mediaPlayer.getCurrentTime();
+                if (cur != null) updateProgressUI(pi, cur);
+            }
+        }));
+        globalProgressTimer.setCycleCount(Animation.INDEFINITE);
+        globalProgressTimer.play();
+
+        contentArea.getChildren().forEach(n -> { n.setVisible(false); n.setManaged(false); n.setMouseTransparent(true); });
+
+        tabBarScroll.setOnScroll(e -> {
+            if (e.getDeltaY() == 0) return;
+            double cw = tabBar.getBoundsInLocal().getWidth(), vw = tabBarScroll.getViewportBounds().getWidth();
+            if (cw <= vw) return;
+            tabBarScroll.setHvalue(Math.max(0, Math.min(1, tabBarScroll.getHvalue() - e.getDeltaY() / (cw - vw))));
+            e.consume();
+        });
+
+        loadDemoContent();
+        animateEntrance();
+        Platform.runLater(this::checkApiKey);
+    }
+
+    private void checkApiKey() {
+        String key = libraryService.loadYouTubeApiKey();
+        if (key != null && !key.isBlank()) return;
+
+        Alert alert = new Alert(Alert.AlertType.WARNING);
+        alert.setTitle("Clave de API requerida");
+        alert.setHeaderText("No hay ninguna clave de API de YouTube configurada");
+        alert.setContentText(
+            "Sin ella no podrás buscar canciones ni importar playlists de YouTube.\n\n" +
+            "Pulsa «Ir a Configuración» para introducirla.");
+        ButtonType goBtn     = new ButtonType("Ir a Configuración", ButtonBar.ButtonData.OK_DONE);
+        ButtonType laterBtn  = new ButtonType("Ahora no",            ButtonBar.ButtonData.CANCEL_CLOSE);
+        alert.getButtonTypes().setAll(goBtn, laterBtn);
+        alert.showAndWait().ifPresent(bt -> {
+            if (bt.getButtonData() == ButtonBar.ButtonData.OK_DONE)
+                openTab("settings", "⚙", "Configuración", settingsPanel, true, btnSettings);
+        });
+    }
+
+    private void applyCircularClip() {
+        Circle clip = new Circle(28);
+        clip.centerXProperty().bind(albumArt.fitWidthProperty().divide(2));
+        clip.centerYProperty().bind(albumArt.fitHeightProperty().divide(2));
+        albumArt.setClip(clip);
+    }
+
+    // ── Setup ─────────────────────────────────────────────────────────────────
+
+    private void setupTitleBar() {
+        btnClose.setOnAction(e -> {
+            if (globalProgressTimer != null) globalProgressTimer.stop();
+            activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
+            Platform.exit();
+        });
+        btnMinimize.setOnAction(e -> stage().setIconified(true));
+        btnMaximize.setOnAction(e -> {
+            javafx.stage.Stage st = stage();
+            if (st.isFullScreen()) {
+                st.setFullScreen(false);
+            } else {
+                st.setMaximized(!st.isMaximized());
+            }
+        });
+    }
+
+    /** Obtiene el {@code Stage} principal a partir de cualquier nodo ya adjunto. */
+    private javafx.stage.Stage stage() {
+        return (javafx.stage.Stage) btnClose.getScene().getWindow();
+    }
+
+    /** Sincroniza el icono del botón maximizar con el estado actual de la ventana. */
+    private void syncMaximizeIcon(javafx.stage.Stage st) {
+        Platform.runLater(() -> btnMaximize.setText(
+            (st.isMaximized() || st.isFullScreen()) ? "❐" : ""
+        ));
+    }
+
+    private void setupWindowDrag() {
+        titleBar.setOnMousePressed(e -> {
+            titleBarDragging = false;
+            if (resizeHelper != null && resizeHelper.isActive()) return;
+            if (stage().isMaximized() || stage().isFullScreen()) return;
+            windowX = e.getSceneX(); windowY = e.getSceneY();
+        });
+        titleBar.setOnMouseDragged(e -> {
+            if (resizeHelper != null && resizeHelper.isActive()) return;
+            titleBarDragging = true;
+            javafx.stage.Stage st = stage();
+            if (st.isFullScreen()) {
+                // Exit fullscreen when dragged more than 60 px below this screen's top edge
+                javafx.stage.Screen scr = screenAt(e.getScreenX(), e.getScreenY());
+                if (e.getScreenY() > scr.getBounds().getMinY() + 60) {
+                    double ratio = (e.getScreenX() - scr.getBounds().getMinX()) / scr.getBounds().getWidth();
+                    st.setFullScreen(false);
+                    windowX = st.getWidth() * ratio;
+                    windowY = e.getSceneY();
+                    // fall through to reposition
+                } else {
+                    return;
+                }
+            }
+            if (st.isMaximized()) {
+                double ratio = e.getScreenX() / st.getWidth();
+                st.setMaximized(false);
+                windowX = st.getWidth() * ratio;
+                windowY = e.getSceneY();
+            }
+            st.setX(e.getScreenX() - windowX);
+            st.setY(e.getScreenY() - windowY);
+        });
+        titleBar.setOnMouseReleased(e -> {
+            if (titleBarDragging) {
+                // Snap to fullscreen when released within 10 px of the top edge of any screen
+                javafx.stage.Screen scr = screenAt(e.getScreenX(), e.getScreenY());
+                if (e.getScreenY() <= scr.getBounds().getMinY() + 10) {
+                    javafx.stage.Stage st = stage();
+                    // Position the stage on the target screen before going fullscreen
+                    st.setX(scr.getBounds().getMinX());
+                    st.setY(scr.getBounds().getMinY());
+                    st.setFullScreen(true);
+                }
+            }
+            titleBarDragging = false;
+        });
+        titleBar.setOnMouseClicked(e -> {
+            if (e.getClickCount() == 2) btnMaximize.fire();
+        });
+    }
+
+    /** Returns the screen that contains the given screen-coordinate point. */
+    private javafx.stage.Screen screenAt(double sx, double sy) {
+        return javafx.stage.Screen.getScreensForRectangle(sx, sy, 1, 1)
+                .stream().findFirst().orElse(javafx.stage.Screen.getPrimary());
+    }
+
+    private void setupVinylAnimation() {
+        vinylRotation = new RotateTransition(Duration.seconds(6), vinylContainer);
+        vinylRotation.setByAngle(360); vinylRotation.setCycleCount(Animation.INDEFINITE);
+        vinylRotation.setInterpolator(Interpolator.LINEAR);
+    }
+
+    private void setupProgressSlider() {
+        progressSlider.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            javafx.scene.Node t = (javafx.scene.Node) e.getTarget();
+            if (t.getStyleClass().contains("thumb") || t.getStyleClass().contains("track")) {
+                seekingByUser = true;
+            } else {
+                e.consume(); // click missed the track — block Slider's internal snap
+            }
+        });
+        progressSlider.setOnMouseReleased(e -> {
+            if (!seekingByUser) return;
+            seekingByUser = false;
+            if (focusedPlayer != null && focusedPlayer.mediaPlayer != null) {
+                Duration total = focusedPlayer.mediaPlayer.getMedia().getDuration();
+                if (total != null && total.greaterThan(Duration.ZERO))
+                    focusedPlayer.mediaPlayer.seek(total.multiply(progressSlider.getValue() / 100.0));
+            }
+        });
+        progressSlider.valueProperty().addListener((obs, old, val) -> {
+            if (!seekingByUser || focusedPlayer == null || focusedPlayer.mediaPlayer == null) return;
+            Duration total = focusedPlayer.mediaPlayer.getMedia().getDuration();
+            if (total != null && total.greaterThan(Duration.ZERO))
+                timeElapsed.setText(UIUtils.formatTime((int)(val.doubleValue() / 100.0 * total.toSeconds())));
+        });
+    }
+
+    private void setupVolumeSlider() {
+        volumeSavePause = new PauseTransition(Duration.millis(400));
+        volumeSavePause.setOnFinished(e -> libraryService.saveVolume((int) Math.round(volumeSlider.getValue())));
+
+        volumeSlider.valueProperty().addListener((obs, old, val) -> {
+            int pct = (int) Math.round(val.doubleValue());
+            btnVolume.setText(pct == 0 ? "🔇" : pct < 40 ? "🔈" : "🔊");
+            if (volumeLabel != null) volumeLabel.setText(pct + "%");
+            volumeSavePause.playFromStart();
+            if (focusedPlayer == null) return;
+            if (focusedPlayer.mashupPartner != null || focusedPlayer.isMashupLinked) return;
+            focusedPlayer.volume = pct / 100.0;
+            applyVolumesToAll();
+            if (focusedPlayer.panelVolumeSlider != null && Math.abs(focusedPlayer.panelVolumeSlider.getValue() - pct) > 0.5)
+                focusedPlayer.panelVolumeSlider.setValue(pct);
+        });
+    }
+
+    private void setupSidebarNavigation() {
+        btnHome.setOnAction(e     -> openTab("home",     "🏠", "Inicio",        homePanel,     true, btnHome));
+        btnLibrary.setOnAction(e  -> { refreshLibraryPanel(); openTab("library", "📚", "Biblioteca",   libraryPanel,  true, btnLibrary); });
+        btnSettings.setOnAction(e -> openTab("settings", "⚙",  "Configuración", settingsPanel, true, btnSettings));
+
+        libraryService.getGroups().addListener(
+            (javafx.collections.ListChangeListener<LibraryGroup>) c -> refreshSidebarList()
+        );
+        refreshSidebarList();
+
+        groupListView.setOnMouseClicked(e -> {
+            int idx = groupListView.getSelectionModel().getSelectedIndex();
+            if (idx >= 0 && idx < libraryService.getGroups().size())
+                showGroupDetail(libraryService.getGroups().get(idx));
+        });
+    }
+
+    private void refreshSidebarList() {
+        ObservableList<String> names = FXCollections.observableArrayList();
+        libraryService.getGroups().forEach(g -> names.add((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName()));
+        groupListView.setItems(names);
+    }
+
+    private void setupSettingsPanel() {
+        int savedPct = libraryService.loadAmbientDuck();
+
+        Label titleLbl = new Label("Configuración");
+        titleLbl.getStyleClass().add("greeting");
+
+        Label subtitleLbl = new Label("Ajustes de reproducción");
+        subtitleLbl.getStyleClass().add("greeting-sub");
+
+        VBox header = new VBox(4, titleLbl, subtitleLbl);
+
+        Label sectionLbl = new Label("VOLUMEN DE AMBIENTE");
+        sectionLbl.getStyleClass().add("sidebar-section-label");
+
+        Label descLbl = new Label(
+            "Volumen al que suenan las canciones de tipo Ambiente cuando otra canción está reproduciendo.");
+        descLbl.setWrapText(true);
+        descLbl.getStyleClass().add("greeting-sub");
+
+        Slider duckSlider = new Slider(0, 100, savedPct);
+        duckSlider.setMajorTickUnit(25);
+        duckSlider.setMinorTickCount(4);
+        duckSlider.setShowTickMarks(true);
+        duckSlider.setShowTickLabels(true);
+        duckSlider.setSnapToTicks(false);
+        duckSlider.getStyleClass().add("volume-slider");
+        duckSlider.setMaxWidth(340);
+
+        Label duckValueLbl = new Label(savedPct + "%");
+        duckValueLbl.getStyleClass().add("volume-pct-label");
+
+        HBox sliderRow = new HBox(12, duckSlider, duckValueLbl);
+        sliderRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+
+        duckSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
+            int pct = (int) Math.round(newVal.doubleValue());
+            duckValueLbl.setText(pct + "%");
+            ambientDuckRatio = pct / 100.0;
+            applyVolumesToAll();
+            if (ambientDuckSavePause == null) {
+                ambientDuckSavePause = new PauseTransition(Duration.millis(600));
+                ambientDuckSavePause.setOnFinished(e -> libraryService.saveAmbientDuck((int) Math.round(duckSlider.getValue())));
+            }
+            ambientDuckSavePause.playFromStart();
+        });
+
+        VBox section = new VBox(8, sectionLbl, descLbl, sliderRow);
+
+        // ── YouTube API key section ───────────────────────────────────────────
+        Label apiSectionLbl = new Label("CLAVE DE API DE YOUTUBE");
+        apiSectionLbl.getStyleClass().add("sidebar-section-label");
+
+        Label apiDescLbl = new Label(
+            "Necesaria para buscar canciones y obtener playlists de YouTube. " +
+            "Los cambios se aplican al reiniciar la aplicación.");
+        apiDescLbl.setWrapText(true);
+        apiDescLbl.getStyleClass().add("greeting-sub");
+
+        String currentKey = libraryService.loadYouTubeApiKey();
+        if (currentKey.isBlank()) currentKey = ConfigLoader.get("youtube.api.key");
+
+        TextField apiField = new TextField(currentKey);
+        apiField.setPromptText("AIza…");
+        apiField.getStyleClass().add("detail-search-field");
+        apiField.setPrefWidth(320);
+
+        Label apiStatusLbl = new Label("");
+        apiStatusLbl.getStyleClass().add("greeting-sub");
+        apiStatusLbl.setStyle("-fx-text-fill:#c0392b;");
+
+        Button saveRestartBtn = new Button("💾  Guardar y reiniciar");
+        saveRestartBtn.getStyleClass().add("btn-primary");
+        saveRestartBtn.setOnAction(e -> {
+            String key = apiField.getText().strip();
+            if (key.isBlank()) {
+                apiStatusLbl.setText("⚠ La clave no puede estar vacía.");
+                return;
+            }
+            libraryService.saveYouTubeApiKey(key);
+            try {
+                ProcessHandle.current().info().command().ifPresent(cmd -> {
+                    String[] args = ProcessHandle.current().info().arguments().orElse(new String[0]);
+                    List<String> command = new ArrayList<>();
+                    command.add(cmd);
+                    command.addAll(java.util.Arrays.asList(args));
+                    try { new ProcessBuilder(command).inheritIO().start(); }
+                    catch (java.io.IOException ignored) {}
+                });
+            } catch (Exception ignored) {}
+            Platform.exit();
+        });
+
+        HBox apiRow = new HBox(10, apiField, saveRestartBtn);
+        apiRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+
+        Separator settingsSep = new Separator();
+        settingsSep.setPadding(new javafx.geometry.Insets(8, 0, 8, 0));
+
+        VBox apiSection = new VBox(8, apiSectionLbl, apiDescLbl, apiRow, apiStatusLbl);
+
+        settingsPanel.getChildren().setAll(header, section, settingsSep, apiSection);
+    }
+
+    // ── Tab system ────────────────────────────────────────────────────────────
+
+    /**
+     * Abre una pestaña con el ID dado, o la activa si ya existe.
+     * El panel se añade a {@code contentArea} la primera vez.
+     */
+    private void openTab(String id, String icon, String title, VBox panel, boolean closeable, Button sidebarBtn) {
+        AppTab existing = findTab(id);
+        if (existing != null) { existing.title = title; activateTab(existing); return; }
+        AppTab tab = new AppTab(id, icon, title, panel, closeable, sidebarBtn);
+        openTabs.add(tab);
+        if (!contentArea.getChildren().contains(panel)) {
+            panel.setVisible(false); panel.setManaged(false); contentArea.getChildren().add(panel);
+        }
+        activateTab(tab);
+    }
+
+    private AppTab findTab(String id) {
+        return openTabs.stream().filter(t -> t.id.equals(id)).findFirst().orElse(null);
+    }
+
+    private void activateTab(AppTab tab) {
+        activeTab = tab;
+        contentArea.getChildren().forEach(n -> { n.setVisible(false); n.setManaged(false); n.setMouseTransparent(true); });
+        tab.panel.setVisible(true); tab.panel.setManaged(true); tab.panel.setMouseTransparent(false);
+
+        if (tab.id.startsWith("player:") || tab.id.startsWith("mashup:")) {
+            PlayerInstance pi = findPlayerInstance(tab.id);
+            if (pi != null) setFocusedPlayer(pi);
+        }
+        updateMiniPlayerVisibility();
+
+        for (Button b : new Button[]{btnHome, btnLibrary}) b.getStyleClass().remove("nav-btn-active");
+        if (tab.sidebarBtn != null) tab.sidebarBtn.getStyleClass().add("nav-btn-active");
+
+        rebuildTabBar();
+        FadeTransition ft = new FadeTransition(Duration.millis(150), tab.panel);
+        ft.setFromValue(0); ft.setToValue(1); ft.play();
+    }
+
+    private void closeTab(String id) {
+        AppTab tab = findTab(id);
+        if (tab == null || !tab.closeable) return;
+        int idx = openTabs.indexOf(tab);
+        openTabs.remove(tab);
+        contentArea.getChildren().remove(tab.panel);
+
+        if (id.startsWith("player:") || id.startsWith("mashup:")) {
+            PlayerInstance pi = findPlayerInstance(id);
+            if (pi != null) {
+                if (pi.mashupXfadeAnim != null) { pi.mashupXfadeAnim.stop(); pi.mashupXfadeAnim = null; }
+                if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
+                if (pi.waveAnim != null) pi.waveAnim.stop();
+                pi.isPlaying = false;
+                if (pi.mashupPartner != null) {
+                    PlayerInstance pb = pi.mashupPartner;
+                    if (pb.mediaPlayer != null) { pb.mediaPlayer.stop(); pb.mediaPlayer.dispose(); pb.mediaPlayer = null; }
+                    pb.isPlaying = false;
+                    activePlayers.remove(pb);
+                    pi.mashupPartner = null;
+                }
+                activePlayers.remove(pi);
+                if (focusedPlayer == pi) focusedPlayer = null;
+                applyVolumesToAll();
+            }
+            pickBestFocusedPlayer();
+            updateMiniPlayerVisibility();
+        }
+        if (!openTabs.isEmpty()) activateTab(openTabs.get(Math.max(0, idx - 1)));
+        else rebuildTabBar();
+    }
+
+    private static final double TAB_WIDTH = 168;
+
+    private void rebuildTabBar() {
+        tabBar.getChildren().clear();
+        for (AppTab tab : openTabs) {
+            HBox btn = new HBox(4); btn.getStyleClass().add("tab-btn");
+            if (tab == activeTab)   btn.getStyleClass().add("tab-btn-active");
+            btn.setAlignment(Pos.CENTER); btn.setPrefWidth(TAB_WIDTH); btn.setMinWidth(TAB_WIDTH); btn.setMaxWidth(TAB_WIDTH);
+
+            PlayerInstance tabPi = (tab.id.startsWith("player:") || tab.id.startsWith("mashup:"))
+                ? findPlayerInstance(tab.id) : null;
+            boolean playing = tabPi != null && tabPi.isPlaying;
+            if (playing) btn.getStyleClass().add("tab-btn-playing");
+
+            Label lbl = new Label(tab.icon + "  " + tab.title); lbl.getStyleClass().add("tab-label");
+            lbl.setMaxWidth(tab.closeable ? TAB_WIDTH - 48 : TAB_WIDTH - 20); lbl.setMinWidth(0);
+            HBox.setHgrow(lbl, Priority.ALWAYS); btn.getChildren().add(lbl);
+
+            if (playing) {
+                Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
+                btn.getChildren().add(dot);
+            }
+            if (tab.closeable) {
+                Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
+                final String tid = tab.id; x.setOnAction(e -> { e.consume(); closeTab(tid); });
+                btn.getChildren().add(x);
+            }
+            final AppTab t = tab;
+            btn.setUserData(tab);
+            btn.setOnMouseClicked(e -> {
+                if (tabJustDragged) { tabJustDragged = false; return; }
+                if      (e.getButton() == MouseButton.MIDDLE  && t.closeable)                       closeTab(t.id);
+                else if (e.getButton() == MouseButton.PRIMARY && !(e.getTarget() instanceof Button)) activateTab(t);
+            });
+            setupTabDrag(btn, tab);
+            tabBar.getChildren().add(btn);
+        }
+        scrollActiveTabIntoView();
+    }
+
+    private void scrollActiveTabIntoView() {
+        if (activeTab == null || tabBarScroll == null) return;
+        int idx = openTabs.indexOf(activeTab); if (idx < 0) return;
+        Platform.runLater(() -> {
+            double cw = tabBar.getBoundsInLocal().getWidth(), vw = tabBarScroll.getViewportBounds().getWidth();
+            if (cw <= vw) { tabBarScroll.setHvalue(0); return; }
+            double range = cw - vw, start = idx * TAB_WIDTH, end = start + TAB_WIDTH, scrolled = tabBarScroll.getHvalue() * range;
+            if (start < scrolled)            tabBarScroll.setHvalue(start / range);
+            else if (end > scrolled + vw)    tabBarScroll.setHvalue((end - vw) / range);
+        });
+    }
+
+    private void setupTabDrag(HBox btn, AppTab tab) {
+        btn.setOnMousePressed(e -> {
+            if (e.getButton() != MouseButton.PRIMARY) return;
+            if (e.getTarget() instanceof Button) return;
+            tabDragging      = tab;
+            tabDragStartX    = e.getScreenX();
+            tabDragOrigIdx   = tabBar.getChildren().indexOf(btn);
+            tabDragTargetIdx = tabDragOrigIdx;
+            tabDragActive    = false;  // drag not yet activated
+        });
+
+        btn.setOnMouseDragged(e -> {
+            if (tabDragging != tab) return;
+
+            // Activate drag only after moving past the threshold
+            if (!tabDragActive) {
+                if (Math.abs(e.getScreenX() - tabDragStartX) < 6) return;
+                tabDragActive = true;
+                btn.setViewOrder(-1);
+                btn.getStyleClass().add("tab-btn-dragging");
+            }
+
+            javafx.collections.ObservableList<javafx.scene.Node> ch = tabBar.getChildren();
+            javafx.geometry.Point2D local = tabBar.screenToLocal(e.getScreenX(), e.getScreenY());
+            if (local == null) { e.consume(); return; }
+            double barX = local.getX();
+
+            btn.setTranslateX(barX - (tabDragOrigIdx + 0.5) * TAB_WIDTH);
+
+            int newTarget = tabDragTargetIdx;
+            if (newTarget > 0               && barX < (newTarget - 0.5) * TAB_WIDTH) newTarget--;
+            else if (newTarget < ch.size()-1 && barX > (newTarget + 1.5) * TAB_WIDTH) newTarget++;
+
+            if (newTarget != tabDragTargetIdx) {
+                tabDragTargetIdx = newTarget;
+                for (int i = 0; i < ch.size(); i++) {
+                    if (i == tabDragOrigIdx) continue;
+                    double shift = 0;
+                    if (tabDragTargetIdx > tabDragOrigIdx && i > tabDragOrigIdx && i <= tabDragTargetIdx)
+                        shift = -TAB_WIDTH;
+                    else if (tabDragTargetIdx < tabDragOrigIdx && i >= tabDragTargetIdx && i < tabDragOrigIdx)
+                        shift = TAB_WIDTH;
+                    ch.get(i).setTranslateX(shift);
+                }
+            }
+            e.consume();
+        });
+
+        btn.setOnMouseReleased(e -> {
+            if (tabDragging != tab) return;
+            tabDragging = null;
+
+            if (!tabDragActive) return;  // was a click, let MOUSE_CLICKED handle it
+            tabDragActive = false;
+
+            btn.setViewOrder(0);
+            btn.getStyleClass().remove("tab-btn-dragging");
+            tabBar.getChildren().forEach(n -> n.setTranslateX(0));
+
+            tabJustDragged = true;
+            if (tabDragTargetIdx != tabDragOrigIdx) {
+                javafx.collections.ObservableList<javafx.scene.Node> ch = tabBar.getChildren();
+                javafx.scene.Node node = ch.remove(tabDragOrigIdx);
+                ch.add(tabDragTargetIdx, node);
+                openTabs.clear();
+                for (javafx.scene.Node n : ch) {
+                    if (n.getUserData() instanceof AppTab t) openTabs.add(t);
+                }
+            }
+            rebuildTabBar();
+        });
+    }
+
+    // ── Playback ──────────────────────────────────────────────────────────────
+
+    /**
+     * Crea una nueva instancia de reproductor con una cola de un solo elemento
+     * y comienza la reproducción.
+     */
+    public void playSong(Song song) {
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.add(song);
+        buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+    }
+
+    /**
+     * Crea una nueva instancia de reproductor con una cola completa y comienza
+     * desde {@code song} (que debe pertenecer a {@code fullQueue}).
+     */
+    public void playSongInQueue(Song song, List<Song> fullQueue) {
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.setAll(fullQueue);
+        buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+    }
+
+    private void openSongPaused(Song song, LibraryGroup group) {
+        if (!song.isLocal()) { showToast("Descarga la canción primero"); return; }
+        List<Song> q = group != null
+            ? group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList())
+            : List.of(song);
+
+        AppTab prevTab = activeTab;
+        PlayerInstance prevFocused = focusedPlayer;
+
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.setAll(q.isEmpty() ? List.of(song) : q);
+        buildPanel(pi); activePlayers.add(pi);
+        loadSong(pi, song);
+
+        if (pi.mediaPlayer != null) {
+            pi.mediaPlayer.pause();
+            pi.isPlaying = false;
+            if (pi.waveAnim != null) pi.waveAnim.pause();
+            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+        }
+
+        // Stay on the previous view
+        if (prevTab != null) activateTab(prevTab);
+        if (prevFocused != null) setFocusedPlayer(prevFocused);
+        rebuildTabBar();
+    }
+
+    private void buildPanel(PlayerInstance pi) {
+        PlayerPanelBuilder.build(pi,
+            this::togglePlayInstance,
+            this::playPrevInInstance,
+            this::playNextInInstance,
+            this::toggleShuffle,
+            (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
+            p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
+        );
+    }
+
+    /**
+     * Carga y reproduce {@code song} en la instancia {@code pi}, reemplazando
+     * cualquier {@code MediaPlayer} anterior. Si la canción no es local, abre
+     * el navegador con la URL de YouTube en su lugar.
+     */
+    private void loadSong(PlayerInstance pi, Song song) {
+        if (!song.isLocal()) { UIUtils.openInBrowser(song.getVideoId()); return; }
+
+        if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
+
+        pi.song = song;
+        File file = new File(song.getLocalFilePath());
+        if (!file.exists()) { showToast("Archivo no encontrado: " + file.getName()); return; }
+
+        try {
+            Media media = new Media(file.toURI().toString());
+            pi.mediaPlayer = new MediaPlayer(media);
+            pi.mediaPlayer.setVolume(pi.volume);
+            pi.mediaPlayer.setCycleCount(1);
+
+            media.durationProperty().addListener((obs, old, dur) -> {
+                if (dur != null && dur.greaterThan(Duration.ZERO) && !dur.equals(Duration.UNKNOWN)) {
+                    String totalStr = UIUtils.formatTime((int) dur.toSeconds());
+                    Platform.runLater(() -> {
+                        if (pi.panelTotal != null) pi.panelTotal.setText(totalStr);
+                        if (pi == focusedPlayer) timeTotal.setText(totalStr);
+                    });
+                }
+            });
+
+            media.getMetadata().addListener((javafx.collections.MapChangeListener<String, Object>) ch -> {
+                if (ch.wasAdded() && "image".equals(ch.getKey())) {
+                    Image img = (Image) ch.getValueAdded();
+                    Platform.runLater(() -> {
+                        if (pi.artView  != null) pi.artView.setImage(img);
+                        if (pi == focusedPlayer) albumArt.setImage(img);
+                    });
+                }
+            });
+
+            pi.mediaPlayer.setOnEndOfMedia(() -> Platform.runLater(() -> {
+                if (pi.looping) { pi.mediaPlayer.seek(Duration.ZERO); pi.mediaPlayer.play(); }
+                else            { onSongEnded(pi); }
+            }));
+            pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
+            pi.mediaPlayer.play();
+            pi.isPlaying = true;
+            applyVolumesToAll();
+            rebuildTabBar();
+        } catch (Exception e) { showToast("No se puede reproducir: " + file.getName()); return; }
+
+        if (pi.panelTitle != null) {
+            pi.panelTitle.setText(song.getTitle()); pi.panelArtist.setText(song.getArtist());
+            pi.panelProgress.setValue(0); pi.panelElapsed.setText("0:00"); pi.panelTotal.setText("—");
+            pi.panelPlayPause.setText("⏸");
+        }
+        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
+            try { Image thumb = new Image(song.getThumbnailUrl(), true); if (pi.artView != null) pi.artView.setImage(thumb); }
+            catch (Exception ignored) {}
+        }
+        if (pi.waveAnim != null) pi.waveAnim.play();
+
+        AppTab existingTab = findTab(pi.tabId);
+        if (existingTab != null) existingTab.title = song.getTitle();
+        openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, true, null);
+
+        setFocusedPlayer(pi);
+        updateLoopButtons();
+        updateMiniPlayerVisibility();
+        if (nowPlayingBar.isVisible()) animateNowPlaying();
+    }
+
+    private void togglePlayInstance(PlayerInstance pi) {
+        if (pi == null || pi.mediaPlayer == null) return;
+        if (pi.mashupPartner != null) { toggleMashupPlay(pi); return; }
+        if (!pi.isPlaying) {
+            if (pi.fadeOutAnim != null) { pi.fadeOutAnim.stop(); pi.fadeOutAnim = null; }
+            pi.mediaPlayer.play();
+            pi.isPlaying = true;
+            applyVolumesToAll();
+            if (pi.waveAnim != null) pi.waveAnim.play();
+            if (pi == focusedPlayer) { vinylRotation.play(); addGlowEffect(); }
+            updatePlayPauseButton(); rebuildTabBar();
+        } else {
+            fadeOutAndPause(pi);
+        }
+    }
+
+    private void toggleMashupPlay(PlayerInstance piA) {
+        PlayerInstance piB = piA.mashupPartner;
+        if (piA.mediaPlayer == null) return;
+        if (!piA.isPlaying) {
+            piA.mediaPlayer.play(); piA.isPlaying = true;
+            if (piB != null && piB.mediaPlayer != null) { piB.mediaPlayer.play(); piB.isPlaying = true; }
+            if (piA.waveAnim != null) piA.waveAnim.play();
+            if (piA == focusedPlayer) { vinylRotation.play(); addGlowEffect(); }
+            updatePlayPauseButton(); rebuildTabBar();
+        } else {
+            piA.mediaPlayer.pause(); piA.isPlaying = false;
+            if (piB != null && piB.mediaPlayer != null) { piB.mediaPlayer.pause(); piB.isPlaying = false; }
+            if (piA.waveAnim != null) piA.waveAnim.pause();
+            if (piA == focusedPlayer) { vinylRotation.pause(); removeGlowEffect(); }
+            updatePlayPauseButton(); rebuildTabBar();
+        }
+    }
+
+    private void crossfade(PlayerInstance piA) {
+        PlayerInstance piB = piA.mashupPartner;
+        if (piB == null || piA.mediaPlayer == null || piB.mediaPlayer == null) return;
+        if (piA.mashupXfadeAnim != null) { piA.mashupXfadeAnim.stop(); piA.mashupXfadeAnim = null; }
+        double fromA = piA.mediaPlayer.getVolume(), fromB = piB.mediaPlayer.getVolume();
+        double toA = fromB, toB = fromA;
+        piA.mashupXfadeAnim = new javafx.animation.Timeline(
+            new javafx.animation.KeyFrame(Duration.ZERO,
+                new javafx.animation.KeyValue(piA.mediaPlayer.volumeProperty(), fromA),
+                new javafx.animation.KeyValue(piB.mediaPlayer.volumeProperty(), fromB)),
+            new javafx.animation.KeyFrame(Duration.millis(1500),
+                new javafx.animation.KeyValue(piA.mediaPlayer.volumeProperty(), toA, javafx.animation.Interpolator.EASE_BOTH),
+                new javafx.animation.KeyValue(piB.mediaPlayer.volumeProperty(), toB, javafx.animation.Interpolator.EASE_BOTH))
+        );
+        piA.mashupXfadeAnim.setOnFinished(ev -> {
+            piA.mashupXfadeAnim = null;
+            piA.volume = toA; piB.volume = toB;
+            if (piA.panelVolumeSlider != null) piA.panelVolumeSlider.setValue(toA * 100);
+            if (piB.panelVolumeSlider != null) piB.panelVolumeSlider.setValue(toB * 100);
+        });
+        piA.mashupXfadeAnim.play();
+    }
+
+    /**
+     * Baja el volumen gradualmente en 700 ms (fade-out) y luego pausa el reproductor.
+     * El volumen se restaura al valor original al finalizar el fade para que la siguiente
+     * pulsación de play retome con el volumen correcto.
+     */
+    private void fadeOutAndPause(PlayerInstance pi) {
+        if (pi.mediaPlayer == null) return;
+        pi.isPlaying = false;
+        if (pi == focusedPlayer) {
+            vinylRotation.pause(); removeGlowEffect(); updatePlayPauseButton();
+        } else {
+            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+        }
+        if (pi.fadeOutAnim != null) pi.fadeOutAnim.stop();
+        pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(700),
+            new KeyValue(pi.mediaPlayer.volumeProperty(), 0.0, Interpolator.EASE_IN)));
+        pi.fadeOutAnim.setOnFinished(ev -> {
+            pi.mediaPlayer.pause();
+            if (pi.waveAnim != null) pi.waveAnim.pause();
+            pi.fadeOutAnim = null;
+            applyVolumesToAll();
+            rebuildTabBar();
+        });
+        pi.fadeOutAnim.play();
+    }
+
+    private void onSongEnded(PlayerInstance pi) {
+        pi.isPlaying = false;
+        applyVolumesToAll();
+        if (pi.waveAnim != null) pi.waveAnim.pause();
+        if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+        pickBestFocusedPlayer();
+    }
+
+    private void updateProgressUI(PlayerInstance pi, Duration current) {
+        if (pi.mediaPlayer == null) return;
+        Duration total = pi.mediaPlayer.getMedia().getDuration();
+        if (total == null || !total.greaterThan(Duration.ZERO)) return;
+        double pct = (current.toSeconds() / total.toSeconds()) * 100;
+        String elapsed = UIUtils.formatTime((int) current.toSeconds());
+        if (pi.panelProgress != null && !pi.seeking) { pi.panelProgress.setValue(pct); pi.panelElapsed.setText(elapsed); }
+        if (pi == focusedPlayer && !seekingByUser) { progressSlider.setValue(pct); timeElapsed.setText(elapsed); }
+    }
+
+    private void playPrevInInstance(PlayerInstance pi) {
+        if (pi == null) return;
+        int idx = pi.queue.indexOf(pi.song);
+        if (idx > 0) loadSong(pi, pi.queue.get(idx - 1));
+    }
+
+    private void playNextInInstance(PlayerInstance pi) {
+        if (pi == null) return;
+        if (isShuffle) { loadSong(pi, pi.queue.get((int)(Math.random() * pi.queue.size()))); return; }
+        int idx = pi.queue.indexOf(pi.song);
+        if (idx >= 0 && idx < pi.queue.size() - 1) loadSong(pi, pi.queue.get(idx + 1));
+    }
+
+    private void toggleShuffle() { isShuffle = !isShuffle; UIUtils.toggleStyleClass(btnShuffle, "control-active", isShuffle); }
+
+    private void toggleRepeat() {
+        if (focusedPlayer == null) return;
+        focusedPlayer.looping = !focusedPlayer.looping;
+        updateLoopButtons();
+    }
+
+    private void updateLoopButtons() {
+        boolean on = focusedPlayer != null && focusedPlayer.looping;
+        UIUtils.toggleStyleClass(btnRepeat, "control-active", on);
+        if (focusedPlayer != null && focusedPlayer.panelRepeat != null)
+            UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active", on);
+    }
+
+    private void addGlowEffect() {
+        vinylContainer.setStyle("-fx-effect: dropshadow(gaussian, #f4a7b9, 20, 0.5, 0, 0);");
+        if (focusedPlayer != null && focusedPlayer.artStack != null)
+            UIUtils.toggleStyleClass(focusedPlayer.artStack, "glow", true);
+    }
+
+    private void removeGlowEffect() {
+        vinylContainer.setStyle("");
+        if (focusedPlayer != null && focusedPlayer.artStack != null)
+            UIUtils.toggleStyleClass(focusedPlayer.artStack, "glow", false);
+    }
+
+    private void updatePlayPauseButton() {
+        boolean playing = focusedPlayer != null && focusedPlayer.isPlaying;
+        btnPlayPause.setText(playing ? "⏸" : "▶");
+        if (focusedPlayer != null && focusedPlayer.panelPlayPause != null)
+            focusedPlayer.panelPlayPause.setText(playing ? "⏸" : "▶");
+        rebuildTabBar();
+    }
+
+    // ── Player instance management ────────────────────────────────────────────
+
+    /** Devuelve la instancia cuya pestaña coincide con {@code tabId}, o {@code null}. */
+    private PlayerInstance findPlayerInstance(String tabId) {
+        return activePlayers.stream().filter(pi -> pi.tabId.equals(tabId)).findFirst().orElse(null);
+    }
+
+    /**
+     * Establece {@code pi} como reproductor enfocado y sincroniza toda la barra
+     * "Now Playing": portada, título, artista, sliders de progreso y volumen,
+     * botón play/pausa y estado de bucle.
+     */
+    private void setFocusedPlayer(PlayerInstance pi) {
+        focusedPlayer = pi;
+        Song song = pi.song;
+        if (song != null) {
+            nowPlayingTitle.setText(song.getTitle()); nowPlayingArtist.setText(song.getArtist());
+            if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
+                try { albumArt.setImage(new Image(song.getThumbnailUrl(), true)); } catch (Exception ignored) {}
+        }
+        if (pi.mediaPlayer != null) {
+            Duration cur = pi.mediaPlayer.getCurrentTime(), total = pi.mediaPlayer.getMedia().getDuration();
+            if (cur != null && total != null && total.greaterThan(Duration.ZERO)) {
+                progressSlider.setValue((cur.toSeconds() / total.toSeconds()) * 100);
+                timeElapsed.setText(UIUtils.formatTime((int) cur.toSeconds()));
+                timeTotal.setText(UIUtils.formatTime((int) total.toSeconds()));
+            }
+        }
+        if (pi.mashupPartner == null && !pi.isMashupLinked &&
+            Math.abs(volumeSlider.getValue() - pi.volume * 100) > 0.5) volumeSlider.setValue(pi.volume * 100);
+        if (pi.isPlaying) { vinylRotation.play(); addGlowEffect(); }
+        else              { vinylRotation.pause(); removeGlowEffect(); }
+        updatePlayPauseButton(); updateLoopButtons();
+    }
+
+    @FXML private void onSwitchFocusedPlayer() {
+        List<PlayerInstance> switchable = activePlayers.stream().filter(p -> !p.isMashupLinked).collect(Collectors.toList());
+        if (switchable.size() <= 1) return;
+        int idx = switchable.indexOf(focusedPlayer);
+        setFocusedPlayer(switchable.get((idx + 1) % switchable.size()));
+    }
+
+    /**
+     * Selecciona el mejor reproductor para enfocar: prefiere el que está sonando
+     * (el más reciente primero); si ninguno está sonando, mantiene el más reciente.
+     * Si no hay instancias activas, oculta la barra "Now Playing".
+     */
+    private void pickBestFocusedPlayer() {
+        List<PlayerInstance> candidates = activePlayers.stream().filter(p -> !p.isMashupLinked).collect(Collectors.toList());
+        if (candidates.isEmpty()) {
+            focusedPlayer = null; vinylRotation.pause(); removeGlowEffect();
+            updatePlayPauseButton(); updateMiniPlayerVisibility(); return;
+        }
+        PlayerInstance best = null;
+        for (int i = candidates.size() - 1; i >= 0; i--)
+            if (candidates.get(i).isPlaying) { best = candidates.get(i); break; }
+        if (best == null) best = candidates.get(candidates.size() - 1);
+
+        if (best != focusedPlayer) setFocusedPlayer(best);
+        else {
+            updatePlayPauseButton();
+            if (focusedPlayer.isPlaying) { vinylRotation.play(); addGlowEffect(); }
+            else                         { vinylRotation.pause(); removeGlowEffect(); }
+        }
+        updateMiniPlayerVisibility();
+    }
+
+    private void updateMiniPlayerVisibility() {
+        boolean anyPlayer = activePlayers.stream().anyMatch(p -> !p.isMashupLinked);
+        boolean onPlayerTab = activeTab != null && (activeTab.id.startsWith("player:") || activeTab.id.startsWith("mashup:"));
+        boolean visible = anyPlayer && !onPlayerTab;
+        nowPlayingBar.setVisible(visible); nowPlayingBar.setManaged(visible);
+    }
+
+    // ── Download & playback flow ──────────────────────────────────────────────
+
+    /**
+     * Si la canción ya es local, la reproduce directamente con la cola del grupo.
+     * Si no, la descarga con {@link DownloadService} (mostrando el progreso en la
+     * barra "Now Playing") y la reproduce al terminar. Las descargas en paralelo del
+     * mismo vídeo se ignoran con un toast informativo.
+     */
+    private void downloadAndPlay(Song song, LibraryGroup group) {
+        if (song.isLocal()) {
+            List<Song> q = group != null
+                ? group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList())
+                : List.of(song);
+            playSongInQueue(song, q.isEmpty() ? List.of(song) : q);
+            return;
+        }
+        final LibraryGroup target = group != null ? group : libraryService.getOrCreateHistorial();
+        if (group == null) target.addSong(song);
+
+        String vid = song.getVideoId();
+        if (downloadingNow.contains(vid)) { showToast("Ya se está descargando «" + song.getTitle() + "»"); return; }
+        downloadingNow.add(vid);
+        nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
+        nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
+
+        downloadService.downloadAudio(song, target.getId())
+            .thenAccept(path -> Platform.runLater(() -> {
+                downloadingNow.remove(vid);
+                song.setLocalFilePath(path.toString());
+                libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
+                List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
+                playSongInQueue(song, locals.isEmpty() ? List.of(song) : locals);
+            }))
+            .exceptionally(ex -> {
+                Platform.runLater(() -> {
+                    downloadingNow.remove(vid);
+                    showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
+                    updateMiniPlayerVisibility();
+                });
+                return null;
+            });
+    }
+
+    // ── Search ────────────────────────────────────────────────────────────────
+
+    @FXML private void onToggleSearchMode() {
+        searchPlaylistMode = !searchPlaylistMode;
+        UIUtils.toggleStyleClass(btnSearchPlaylists, "toggle-btn-active",  searchPlaylistMode);
+        UIUtils.toggleStyleClass(btnSearchVideos,    "toggle-btn-active", !searchPlaylistMode);
+        if (!searchField.getText().trim().isEmpty()) onSearchAction();
+    }
+
+    @FXML private void onSearchAction() {
+        String query = searchField.getText().trim(); if (query.isEmpty()) return;
+        openTab("search", "🔍", "🔍 " + query, searchPanel, true, null);
+        searchStatusLabel.setText("Buscando «" + query + "»…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        int max = ConfigLoader.getInt("youtube.search.max_results", 20);
+
+        if (searchPlaylistMode) {
+            youTubeService.searchPlaylists(query, max)
+                .thenAccept(pl -> Platform.runLater(() -> {
+                    searchSpinner.setVisible(false);
+                    if (pl.isEmpty()) { searchStatusLabel.setText("Sin resultados."); return; }
+                    searchStatusLabel.setText(pl.size() + " playlists");
+                    pl.forEach(p -> searchResultsPane.getChildren().add(
+                        CardBuilder.playlistCard(p, () -> importPlaylistToLibrary(p))));
+                }))
+                .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
+        } else {
+            youTubeService.search(query, max)
+                .thenAccept(songs -> Platform.runLater(() -> {
+                    searchSpinner.setVisible(false);
+                    if (songs.isEmpty()) { searchStatusLabel.setText("Sin resultados."); return; }
+                    searchStatusLabel.setText(songs.size() + " resultados");
+                    songs.forEach(s -> searchResultsPane.getChildren().add(
+                        CardBuilder.songCard(s, () -> downloadAndPlay(s, null), UIUtils::openInBrowser, this::showGroupSelector)));
+                }))
+                .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
+        }
+    }
+
+    @FXML private void onQuickSearchRecent()    { searchField.setText("top hits 2024");  onSearchAction(); }
+    @FXML private void onQuickSearchFavorites() { searchField.setText("favorites mix");   onSearchAction(); }
+    @FXML private void onQuickSearchRadio()     { searchField.setText("lofi radio");      onSearchAction(); }
+    @FXML private void onQuickSearchNew()       { searchField.setText("new music 2025");  onSearchAction(); }
+    @FXML private void onOpenInBrowser()        { if (focusedPlayer != null && focusedPlayer.song != null && !focusedPlayer.song.isLocal()) UIUtils.openInBrowser(focusedPlayer.song.getVideoId()); }
+    @FXML private void onShowQueue()            { /* reservado */ }
+
+    // ── Library ───────────────────────────────────────────────────────────────
+
+    @FXML private void onNewGroupAction() {
+        TextInputDialog dlg = new TextInputDialog();
+        dlg.setTitle("Nueva colección"); dlg.setHeaderText(null); dlg.setContentText("Nombre de la colección:");
+        dlg.showAndWait().filter(s -> !s.isBlank()).ifPresent(name -> {
+            LibraryGroup g = libraryService.createGroup(name);
+            refreshLibraryPanel();
+            openTab("library", "📚", "Biblioteca", libraryPanel, true, btnLibrary);
+            offerImportFolder(g);
+        });
+    }
+
+    private void importPlaylistToLibrary(YouTubePlaylistInfo pl) {
+        if (libraryService.getGroups().stream().anyMatch(g -> g.getId().equals(pl.getPlaylistId()))) {
+            showToast("Ya está en tu biblioteca"); return;
+        }
+        LibraryGroup group = LibraryGroup.fromYouTubePlaylist(pl.getPlaylistId(), pl.getTitle(), pl.getThumbnailUrl(), pl.getDescription());
+        libraryService.addGroup(group);
+        youTubeService.getPlaylistItems(pl.getPlaylistId())
+            .thenAccept(songs -> Platform.runLater(() -> {
+                songs.forEach(group::addSong);
+                refreshLibraryPanel();
+                showToast("«" + pl.getTitle() + "» añadida a la biblioteca");
+            }));
+    }
+
+    private void refreshLibraryPanel() {
+        libraryGroupsContainer.getChildren().clear();
+        if (libraryService.getGroups().isEmpty()) {
+            Label empty = new Label("Aún no tienes colecciones.\nUsa «Nueva colección» para empezar.");
+            empty.getStyleClass().add("empty-library-hint"); empty.setWrapText(true);
+            libraryGroupsContainer.getChildren().add(empty); return;
+        }
+        libraryService.getGroups().forEach(g ->
+            libraryGroupsContainer.getChildren().add(GroupDetailBuilder.groupSection(g,
+                () -> { libraryService.removeGroup(g); refreshLibraryPanel(); refreshSidebarList(); },
+                btn -> refreshYouTubePlaylist(g, btn),
+                () -> showGroupDetail(g)))
+        );
+    }
+
+    private void showGroupDetail(LibraryGroup group) {
+        String tabId = "col:" + group.getId();
+        AppTab existing = findTab(tabId); if (existing != null) { activateTab(existing); return; }
+        VBox panel = GroupDetailBuilder.detailPanel(group,
+            () -> { refreshLibraryPanel(); openTab("library", "📚", "Biblioteca", libraryPanel, true, btnLibrary); },
+            () -> { List<Song> loc = group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
+                    if (!loc.isEmpty()) playSongInQueue(loc.get(0), loc); else showToast("Sin archivos locales"); },
+            () -> { importFolder(group); showGroupDetail(group); },
+            btn -> refreshYouTubePlaylist(group, btn),
+            () -> onDownloadAllAction(group),
+            UIUtils::openInBrowser,
+            (song, grp) -> downloadAndPlay(song, grp),
+            (song, grp) -> openSongPaused(song, grp),
+            songs -> openMashupPlayer(songs.get(0), songs.get(1)),
+            libraryService, this::showToast);
+        openTab(tabId, group.isYoutubePlaylist() ? "📺" : "📋", group.getName(), panel, true, btnLibrary);
+    }
+
+    private void openMashupPlayer(Song songA, Song songB) {
+        if (!songA.isLocal()) { showToast("Descarga «" + songA.getTitle() + "» primero"); return; }
+        if (!songB.isLocal()) { showToast("Descarga «" + songB.getTitle() + "» primero"); return; }
+
+        String tabId = "mashup:" + System.currentTimeMillis();
+
+        PlayerInstance piA = new PlayerInstance(tabId);
+        piA.volume = 1.0;
+        piA.looping = true;
+        piA.queue.add(songA);
+
+        PlayerInstance piB = new PlayerInstance(tabId + ":b");
+        piB.isMashupLinked = true;
+        piB.volume = 0.0;
+        piB.looping = true;
+        piB.queue.add(songB);
+
+        piA.mashupPartner = piB;
+
+        MashupPanelBuilder.build(piA, piB,
+            () -> toggleMashupPlay(piA),
+            () -> crossfade(piA));
+
+        activePlayers.add(piA);
+        activePlayers.add(piB);
+
+        loadMashupSong(piA, songA);
+        loadMashupSong(piB, songB);
+
+        openTab(tabId, "⇄", "Mashup", piA.panel, true, null);
+        setFocusedPlayer(piA);
+        updateMiniPlayerVisibility();
+    }
+
+    private void loadMashupSong(PlayerInstance pi, Song song) {
+        if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
+        pi.song = song;
+        java.io.File file = new java.io.File(song.getLocalFilePath());
+        if (!file.exists()) { showToast("Archivo no encontrado: " + file.getName()); return; }
+        try {
+            javafx.scene.media.Media media = new javafx.scene.media.Media(file.toURI().toString());
+            pi.mediaPlayer = new javafx.scene.media.MediaPlayer(media);
+            pi.mediaPlayer.setVolume(pi.volume);
+            pi.mediaPlayer.setCycleCount(1);
+            pi.mediaPlayer.setOnEndOfMedia(() ->
+                javafx.application.Platform.runLater(() -> {
+                    if (pi.mediaPlayer != null) { pi.mediaPlayer.seek(Duration.ZERO); pi.mediaPlayer.play(); }
+                })
+            );
+            pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
+            media.durationProperty().addListener((obs, old, dur) -> {
+                if (dur != null && dur.greaterThan(Duration.ZERO) && !dur.equals(Duration.UNKNOWN)) {
+                    String totalStr = UIUtils.formatTime((int) dur.toSeconds());
+                    javafx.application.Platform.runLater(() -> {
+                        if (pi.panelTotal != null) pi.panelTotal.setText(totalStr);
+                        if (pi == focusedPlayer) timeTotal.setText(totalStr);
+                    });
+                }
+            });
+            pi.mediaPlayer.play();
+            pi.isPlaying = true;
+        } catch (Exception e) {
+            showToast("No se puede reproducir: " + file.getName());
+        }
+    }
+
+    private void refreshYouTubePlaylist(LibraryGroup group, Button refreshBtn) {
+        String original = refreshBtn.getText(); refreshBtn.setDisable(true); refreshBtn.setText("…");
+        youTubeService.getPlaylistItems(group.getYoutubePlaylistId())
+            .thenAccept(songs -> Platform.runLater(() -> {
+                Set<String> existing = group.getSongs().stream().map(Song::getVideoId).collect(Collectors.toSet());
+                List<Song> newSongs = songs.stream().filter(s -> !existing.contains(s.getVideoId())).collect(Collectors.toList());
+                for (int i = newSongs.size() - 1; i >= 0; i--) group.getSongs().add(0, newSongs.get(i));
+                refreshBtn.setDisable(false); refreshBtn.setText(original);
+                int added = newSongs.size();
+                showToast(added > 0
+                    ? "+" + added + " canción" + (added == 1 ? "" : "es") + " nueva" + (added == 1 ? "" : "s") + " en «" + group.getName() + "»"
+                    : "«" + group.getName() + "» ya está al día");
+                refreshLibraryPanel();
+            }))
+            .exceptionally(ex -> {
+                Platform.runLater(() -> { refreshBtn.setDisable(false); refreshBtn.setText(original); showToast("Error al actualizar: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage()); });
+                return null;
+            });
+    }
+
+    private void onDownloadAllAction(LibraryGroup group) {
+        List<Song> toDownload = group.getSongs().stream().filter(s -> !s.isLocal()).collect(Collectors.toList());
+        if (toDownload.isEmpty()) { showToast("Todas las canciones ya están descargadas"); return; }
+        DownloadDialogs.confirmAndStart(group, toDownload, contentArea.getScene().getWindow(),
+            downloadService, libraryService,
+            getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm(),
+            this::showToast, () -> { libraryService.save(); refreshLibraryPanel(); });
+    }
+
+    private void offerImportFolder(LibraryGroup group) {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Importar carpeta"); alert.setHeaderText(null);
+        alert.setContentText("¿Quieres añadir archivos de una carpeta a «" + group.getName() + "»?");
+        alert.showAndWait().filter(r -> r == ButtonType.OK).ifPresent(r -> importFolder(group));
+    }
+
+    private void importFolder(LibraryGroup group) {
+        DirectoryChooser chooser = new DirectoryChooser(); chooser.setTitle("Seleccionar carpeta de música");
+        File dir = chooser.showDialog(contentArea.getScene().getWindow()); if (dir == null) return;
+        List<File> files = scanAudioFiles(dir);
+        if (files.isEmpty()) { showToast("No se encontraron archivos de audio en la carpeta"); return; }
+        files.forEach(f -> group.addSong(Song.fromLocalFile(f)));
+        refreshLibraryPanel();
+        showToast(files.size() + " archivos añadidos a «" + group.getName() + "»");
+    }
+
+    private List<File> scanAudioFiles(File dir) {
+        Set<String> ext = Set.of("mp3", "wav", "m4a", "aac", "mp4", "aif", "aiff", "ogg");
+        File[] files = dir.listFiles(); if (files == null) return Collections.emptyList();
+        return Arrays.stream(files).filter(File::isFile)
+            .filter(f -> { String n = f.getName().toLowerCase(); int d = n.lastIndexOf('.'); return d >= 0 && ext.contains(n.substring(d + 1)); })
+            .sorted(Comparator.comparing(f -> f.getName().toLowerCase()))
+            .collect(Collectors.toList());
+    }
+
+    private void showGroupSelector(Song song, Node anchor) {
+        ContextMenu menu = new ContextMenu();
+        MenuItem newItem = new MenuItem("＋  Nueva colección");
+        newItem.setOnAction(e -> {
+            TextInputDialog dlg = new TextInputDialog();
+            dlg.setTitle("Nueva colección"); dlg.setHeaderText(null); dlg.setContentText("Nombre:");
+            dlg.showAndWait().filter(s -> !s.isBlank()).ifPresent(name -> {
+                LibraryGroup g = libraryService.createGroup(name);
+                libraryService.addSongToGroup(song, g); refreshLibraryPanel(); showToast("Añadido a «" + name + "»");
+            });
+        });
+        menu.getItems().add(newItem);
+        List<LibraryGroup> groups = libraryService.getGroups();
+        if (!groups.isEmpty()) {
+            menu.getItems().add(new SeparatorMenuItem());
+            groups.forEach(g -> {
+                MenuItem item = new MenuItem((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName());
+                item.setOnAction(ev -> { libraryService.addSongToGroup(song, g); refreshLibraryPanel(); showToast("Añadido a «" + g.getName() + "»"); });
+                menu.getItems().add(item);
+            });
+        }
+        menu.show(anchor, javafx.geometry.Side.BOTTOM, 0, 0);
+    }
+
+    // ── Animations ────────────────────────────────────────────────────────────
+
+    private void animateNowPlaying() {
+        FadeTransition ft = new FadeTransition(Duration.millis(400), nowPlayingBar);
+        ft.setFromValue(0.6); ft.setToValue(1.0);
+        TranslateTransition tt = new TranslateTransition(Duration.millis(300), nowPlayingBar);
+        tt.setFromY(10); tt.setToY(0);
+        new ParallelTransition(ft, tt).play();
+    }
+
+    private void animateEntrance() {
+        sidebar.setOpacity(0); contentArea.setOpacity(0);
+        FadeTransition fadeSide   = new FadeTransition(Duration.millis(500), sidebar);    fadeSide.setFromValue(0);   fadeSide.setToValue(1);
+        TranslateTransition slide = new TranslateTransition(Duration.millis(500), sidebar); slide.setFromX(-30);          slide.setToX(0);
+        FadeTransition fadeMain   = new FadeTransition(Duration.millis(600), contentArea); fadeMain.setFromValue(0);   fadeMain.setToValue(1); fadeMain.setDelay(Duration.millis(200));
+        new ParallelTransition(new ParallelTransition(fadeSide, slide), fadeMain).play();
+    }
+
+    private void loadDemoContent() {
+        int hour = java.time.LocalTime.now().getHour();
+        greetingLabel.setText(hour < 12 ? "Buenos días ☀️" : hour < 18 ? "Buenas tardes 🌤" : "Buenas noches 🌙");
+        String[][] demos = {
+            {"Lo-fi Beats", "Relajante", "#fdd5e2"}, {"Pop Hits", "Energético", "#d5e8f4"},
+            {"Indie Chill", "Tranquilo",  "#f4f0c8"}, {"Jazz Café", "Atmosférico", "#d5f4e6"},
+            {"Acoustic",   "Acogedor",   "#f4dcd5"}, {"Electronic", "Moderno",    "#e5d5f4"},
+        };
+        for (String[] d : demos)
+            featuredPane.getChildren().add(CardBuilder.featuredCard(d[0], d[1], d[2], q -> { searchField.setText(q); onSearchAction(); }));
+    }
+
+    // ── Keyboard shortcuts ────────────────────────────────────────────────────
+
+    private void onGlobalKey(KeyEvent e) {
+        if (e.getTarget() instanceof TextInputControl) return;
+        switch (e.getCode()) {
+            case SPACE  -> { if (focusedPlayer != null) { togglePlayInstance(focusedPlayer); e.consume(); } }
+            case LEFT   -> { seekRelative(-5); e.consume(); }
+            case RIGHT  -> { seekRelative( 5); e.consume(); }
+            case UP     -> { adjustVolume( 1); e.consume(); }
+            case DOWN   -> { adjustVolume(-1); e.consume(); }
+            case F11    -> { javafx.stage.Stage st = stage(); st.setFullScreen(!st.isFullScreen()); e.consume(); }
+            default     -> {}
+        }
+    }
+
+    private void seekRelative(int seconds) {
+        if (focusedPlayer == null || focusedPlayer.mediaPlayer == null) return;
+        Duration cur = focusedPlayer.mediaPlayer.getCurrentTime(), total = focusedPlayer.mediaPlayer.getMedia().getDuration();
+        if (cur == null || total == null) return;
+        Duration next = cur.add(Duration.seconds(seconds));
+        focusedPlayer.mediaPlayer.seek(next.lessThan(Duration.ZERO) ? Duration.ZERO : next.greaterThan(total) ? total : next);
+    }
+
+    private void adjustVolume(int delta) {
+        volumeSlider.setValue(Math.max(0, Math.min(100, volumeSlider.getValue() + delta)));
+    }
+
+    // ── Volume ducking ────────────────────────────────────────────────────────
+
+    private double effectiveVolume(PlayerInstance pi) {
+        if (pi.song == null || !"Ambiente".equals(pi.song.getType())) return pi.volume;
+        boolean nonAmbientePlaying = activePlayers.stream().anyMatch(p ->
+            p != pi && p.isPlaying && !p.isMashupLinked &&
+            (p.song == null || !"Ambiente".equals(p.song.getType())));
+        return nonAmbientePlaying ? pi.volume * ambientDuckRatio : pi.volume;
+    }
+
+    private void applyVolumesToAll() {
+        for (PlayerInstance p : new ArrayList<>(activePlayers)) {
+            if (p.isMashupLinked || p.mashupPartner != null) continue;
+            if (p.mediaPlayer != null && p.fadeOutAnim == null)
+                p.mediaPlayer.setVolume(effectiveVolume(p));
+        }
+    }
+
+    // ── Utils ─────────────────────────────────────────────────────────────────
+
+    private void showToast(String message) {
+        Platform.runLater(() -> {
+            if (toastAnim != null) { toastAnim.stop(); toastAnim = null; }
+            if (toastPopup != null) toastPopup.hide();
+
+            Label lbl = new Label("✓  " + message);
+            lbl.setStyle(
+                "-fx-background-color: #5a3878;" +
+                "-fx-text-fill: white;" +
+                "-fx-font-size: 13px;" +
+                "-fx-font-weight: bold;" +
+                "-fx-padding: 10 22 10 22;" +
+                "-fx-background-radius: 20px;" +
+                "-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 12, 0.2, 0, 3);"
+            );
+            lbl.setOpacity(0);
+
+            toastPopup = new javafx.stage.Popup();
+            toastPopup.setAutoHide(false);
+            toastPopup.getContent().add(lbl);
+
+            javafx.stage.Stage st = stage();
+            toastPopup.show(st, st.getX(), st.getY() + 62);
+            // reposition to center once the label has been laid out
+            lbl.widthProperty().addListener(new javafx.beans.value.ChangeListener<Number>() {
+                @Override
+                public void changed(javafx.beans.value.ObservableValue<? extends Number> o,
+                                    Number old, Number w) {
+                    if (w.doubleValue() > 0) {
+                        toastPopup.setX(st.getX() + (st.getWidth() - w.doubleValue()) / 2.0);
+                        lbl.widthProperty().removeListener(this);
+                    }
+                }
+            });
+
+            FadeTransition fadeIn = new FadeTransition(Duration.millis(220), lbl);
+            fadeIn.setToValue(1);
+
+            PauseTransition hold = new PauseTransition(Duration.millis(2200));
+
+            FadeTransition fadeOut = new FadeTransition(Duration.millis(350), lbl);
+            fadeOut.setToValue(0);
+
+            toastAnim = new SequentialTransition(fadeIn, hold, fadeOut);
+            toastAnim.setOnFinished(e -> { toastPopup.hide(); toastPopup = null; toastAnim = null; });
+            toastAnim.play();
+        });
+    }
+}

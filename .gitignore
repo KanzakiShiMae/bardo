@@ -1,0 +1,24 @@
+# ── Build output ─────────────────────────────────────────────
+target/
+*.class
+
+# ── IDE ──────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.settings/
+*.swp
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+
+# ── Local user data (generated at runtime, not source) ───────
+# La biblioteca y configuración se guardan en %APPDATA%\Bardo\
+# y nunca forman parte del repositorio.
