@@ -84,6 +84,26 @@
                     <mainClass>com.musicplayer.App</mainClass>
                 </configuration>
             </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>3.6.3</version>
+                <configuration>
+                    <release>17</release>
+                    <encoding>UTF-8</encoding>
+                    <charset>UTF-8</charset>
+                    <docencoding>UTF-8</docencoding>
+                    <windowtitle>Bardo 1.0.0 — API</windowtitle>
+                    <doctitle>Bardo 1.0.0</doctitle>
+                    <header><![CDATA[<b>Bardo</b> 1.0.0]]></header>
+                    <bottom><![CDATA[Copyright &copy; 2026 Bardo. Licencia MIT.]]></bottom>
+                    <doclint>none</doclint>
+                    <failOnError>false</failOnError>
+                    <quiet>true</quiet>
+                    <show>protected</show>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 </project>

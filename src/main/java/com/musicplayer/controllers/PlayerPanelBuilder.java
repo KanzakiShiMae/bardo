@@ -15,9 +15,22 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
- * Construye el panel de reproductor completo y asigna todas las referencias de UI
- * a la {@link PlayerInstance} dada. La visualización de onda se actualiza externamente
- * desde {@code MainController} vía el {@code AudioSpectrumListener} del MediaPlayer.
+ * Construye el panel de reproductor completo (vista expandida de una canción)
+ * y asigna todas las referencias de UI a la {@link PlayerInstance} proporcionada.
+ *
+ * <p>El panel contiene:
+ * <ul>
+ *   <li>Miniatura cuadrada con esquinas redondeadas (200×200 px).</li>
+ *   <li>Canvas de forma de onda ({@code panelWaveCanvas}, 340×64 px) actualizado en tiempo
+ *       real desde el {@code AudioSpectrumListener} del {@code MediaPlayer}.</li>
+ *   <li>Controles de reproducción: anterior/siguiente (navegan entre pestañas), play/pausa,
+ *       shuffle, repetición y volumen.</li>
+ *   <li>Barra de progreso interactiva con seek mediante clic o arrastre del thumb.</li>
+ * </ul>
+ *
+ * <p>Los botones prev/next están cableados a los callbacks {@code onPrev}/{@code onNext}
+ * que en {@code MainController} invocan {@code navigateTab(-1/+1)}, no cambian de canción.
+ * La visualización de onda se dibuja externamente mediante {@code MainController.drawWaveCanvas()}.
  */
 public final class PlayerPanelBuilder {
 
@@ -38,13 +51,13 @@ public final class PlayerPanelBuilder {
 
         // ── Album art (square with rounded corners) ──────────────────────────
         ImageView artView = new ImageView();
-        artView.setFitWidth(200); artView.setFitHeight(200); artView.setPreserveRatio(false);
-        Rectangle artClip = new Rectangle(200, 200);
+        artView.setFitWidth(320); artView.setFitHeight(180); artView.setPreserveRatio(false);
+        Rectangle artClip = new Rectangle(320, 180);
         artClip.setArcWidth(20); artClip.setArcHeight(20);
         artView.setClip(artClip);
 
         StackPane artStack = new StackPane(artView);
-        artStack.setMaxSize(200, 200); artStack.setMinSize(200, 200);
+        artStack.setMaxSize(320, 180); artStack.setMinSize(320, 180);
         artStack.getStyleClass().add("player-art-container");
 
         // ── Waveform canvas ──────────────────────────────────────────────────

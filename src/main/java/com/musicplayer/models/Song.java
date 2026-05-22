@@ -5,6 +5,19 @@ import javafx.beans.property.StringProperty;
 
 import java.io.File;
 
+/**
+ * Modelo inmutable (salvo {@code localFilePath}, {@code duration} y {@code type}) que
+ * representa una canción, ya sea de YouTube o de disco local.
+ *
+ * <p>Para canciones de YouTube, {@code videoId} es el ID de 11 caracteres del vídeo y
+ * {@code localFilePath} estará vacío hasta que se descargue el audio. Para archivos locales
+ * creados con {@link #fromLocalFile}, el {@code videoId} contiene la ruta absoluta del
+ * archivo (actúa como identificador único).
+ *
+ * <p>Los campos están respaldados por {@link javafx.beans.property.StringProperty} para
+ * permitir binding reactivo en la UI (p. ej. actualizar duración cuando el {@code MediaPlayer}
+ * obtiene los metadatos).
+ */
 public class Song {
 
     private final StringProperty videoId;

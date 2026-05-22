@@ -33,26 +33,34 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /**
- * Controlador principal de la aplicación.
+ * Controlador principal de la aplicación Bardo.
  *
- * <p>Actúa como coordinador central: gestiona el sistema de pestañas, el reproductor
- * activo enfocado, la búsqueda en YouTube, la biblioteca local y la descarga de audio.
+ * <p>Actúa como coordinador central: gestiona el sistema de pestañas, los reproductores
+ * activos, la pantalla de inicio, la búsqueda en YouTube, la biblioteca local y las
+ * descargas de audio.
  *
- * <p><b>Multi-reproductor:</b> cada canción que se reproduce abre una nueva
- * {@link PlayerInstance} con su propio {@code MediaPlayer} y panel completo. El
- * reproductor enfocado ({@code focusedPlayer}) es el que controla la barra inferior
- * "Now Playing". Se puede cambiar el foco con el botón {@code ⇆} o activando la
- * pestaña correspondiente.
+ * <p><b>Multi-reproductor:</b> cada canción abre una nueva {@link PlayerInstance} con su
+ * propio {@code MediaPlayer} y panel completo. El reproductor enfocado ({@code focusedPlayer})
+ * es el que controla la barra inferior "Now Playing". El foco cambia con el botón ⇆ o
+ * activando la pestaña correspondiente.
  *
- * <p><b>Bucle manual:</b> {@code cycleCount} siempre es 1. El bucle se gestiona en
- * {@code setOnEndOfMedia}: si {@code pi.looping == true} se hace seek a cero y se
- * vuelve a llamar a {@code play()}; de lo contrario se llama a {@link #onSongEnded}.
+ * <p><b>Bucle manual:</b> {@code cycleCount} es siempre 1. El bucle se gestiona en
+ * {@code setOnEndOfMedia}: si {@code pi.looping == true} hace seek a cero y vuelve a
+ * reproducir; de lo contrario llama a {@link #onSongEnded}.
  *
- * <p><b>Ventana redimensionable:</b> aunque el stage usa {@code UNDECORATED}, el
- * {@link ResizeHelper} añade redimensionado mediante detectores de borde. El arrastre
- * de la barra de título cede prioridad cuando el cursor está en la zona de borde.
- * Doble clic en la barra de título o el botón verde maximiza/restaura. {@code F11}
- * alterna el modo pantalla completa.
+ * <p><b>Forma de onda en tiempo real:</b> el {@code AudioSpectrumListener} del
+ * {@code MediaPlayer} alimenta 32 bandas de frecuencia a {@link #drawWaveCanvas} a 30 fps.
+ * El espectro es simétrico: el centro corresponde a los graves (banda 0) y los bordes
+ * a los agudos. Al pausar, {@link #startWaveDecay} anima la bajada de las barras.
+ *
+ * <p><b>Pantalla de inicio:</b> {@link #refreshHomePanel()} muestra las canciones pineadas
+ * (sección "CANCIONES PINEADAS") y las tres colecciones más reproducidas con ≥ 5
+ * reproducciones (sección "COLECCIONES MÁS ESCUCHADAS"). El contador de uso se incrementa
+ * en {@link #downloadAndPlay} cada vez que se reproduce una canción de un grupo.
+ *
+ * <p><b>Ventana redimensionable:</b> el stage usa {@code UNDECORATED}; {@link ResizeHelper}
+ * añade redimensionado por bordes. Doble clic en la barra de título maximiza/restaura;
+ * arrastrar hasta el borde superior activa pantalla completa. {@code F11} la alterna.
  */
 public class MainController implements Initializable {
 
@@ -90,8 +98,33 @@ public class MainController implements Initializable {
     private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
 
     // ── State ─────────────────────────────────────────────────────────────────
-    private boolean isShuffle, searchPlaylistMode, seekingByUser, titleBarDragging;
-    private double  windowX, windowY;
+    private boolean isShuffle, searchPlaylistMode, seekingByUser, titleBarDragging, fakeFullScreen;
+    private double  windowX, windowY, savedStageX, savedStageY, savedStageW, savedStageH;
+
+    private final java.util.Map<String, String> currentTheme    = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, String> baseTheme       = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, String> themeVarModes   = new java.util.LinkedHashMap<>();
+    private boolean dynamicColorsEnabled = true;
+    private final java.util.Map<String, Timeline> colorFadeTimelines = new java.util.HashMap<>();
+    private PauseTransition themeSavePause;
+
+    private static final String DYN_STATIC    = "static";
+    private static final String DYN_PRIMARY   = "primary";
+    private static final String DYN_SECONDARY = "secondary";
+
+    private boolean textContrastEnabled = true;
+    private static final double CONTRAST_THRESHOLD = 3.0;
+
+    private static final String[][] THEME_VARS = {
+        {"bardo-bg",         "#faf8fc", "Fondo principal"},
+        {"bardo-sidebar-bg", "#f5f0fc", "Barra lateral"},
+        {"bardo-accent",     "#f4a7b9", "Acento principal"},
+        {"bardo-accent2",    "#9dc4e8", "Acento secundario"},
+        {"bardo-text",       "#5a4a6a", "Texto principal"},
+        {"bardo-text-muted", "#a090b0", "Texto secundario"},
+        {"bardo-player-bg1", "#fdf6ff", "Reproductor (superior)"},
+        {"bardo-player-bg2", "#f0e8ff", "Reproductor (inferior)"},
+    };
 
     private ResizeHelper     resizeHelper;
     private Timeline         globalProgressTimer;
@@ -126,6 +159,16 @@ public class MainController implements Initializable {
     @Override
     public void initialize(URL url, ResourceBundle rb) {
         libraryService  = LibraryService.getInstance();
+        java.util.Map<String, String> savedTheme = libraryService.loadTheme();
+        java.util.Map<String, String> savedModes = libraryService.loadThemeVarModes();
+        dynamicColorsEnabled = libraryService.loadDynamicColorsEnabled();
+        textContrastEnabled  = libraryService.loadTextContrastEnabled();
+        for (String[] tv : THEME_VARS) {
+            String c = savedTheme.getOrDefault(tv[0], tv[1]);
+            baseTheme.put(tv[0], c);
+            currentTheme.put(tv[0], c);
+            themeVarModes.put(tv[0], savedModes.getOrDefault(tv[0], defaultModeFor(tv[0])));
+        }
         String apiKey   = libraryService.loadYouTubeApiKey();
         if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
         youTubeService  = new YouTubeService(apiKey);
@@ -150,6 +193,7 @@ public class MainController implements Initializable {
         nowPlayingBar.setVisible(false); nowPlayingBar.setManaged(false);
         contentArea.sceneProperty().addListener((obs, old, scene) -> {
             if (scene == null) return;
+            applyTheme(scene);
             scene.addEventFilter(KeyEvent.KEY_PRESSED, this::onGlobalKey);
             // Attach resize helper and store stage reference once the window is known
             scene.windowProperty().addListener((obs2, old2, win) -> {
@@ -157,7 +201,6 @@ public class MainController implements Initializable {
                     resizeHelper = ResizeHelper.attach(st, scene);
                     syncMaximizeIcon(st);
                     st.maximizedProperty().addListener((o, wasMax, isMax) -> syncMaximizeIcon(st));
-                    st.fullScreenProperty().addListener((o, was, isFull) -> syncMaximizeIcon(st));
                 }
             });
         });
@@ -183,6 +226,7 @@ public class MainController implements Initializable {
         });
 
         refreshHomePanel();
+        openTab("home", "🏠", "Inicio", homePanel, true, btnHome);
         animateEntrance();
         Platform.runLater(this::checkApiKey);
     }
@@ -207,7 +251,7 @@ public class MainController implements Initializable {
     }
 
     private void applyCircularClip() {
-        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(44, 44);
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(78, 44);
         clip.setArcWidth(10); clip.setArcHeight(10);
         albumArt.setClip(clip);
     }
@@ -223,8 +267,8 @@ public class MainController implements Initializable {
         btnMinimize.setOnAction(e -> stage().setIconified(true));
         btnMaximize.setOnAction(e -> {
             javafx.stage.Stage st = stage();
-            if (st.isFullScreen()) {
-                st.setFullScreen(false);
+            if (fakeFullScreen) {
+                setFakeFullScreen(st, false);
             } else {
                 st.setMaximized(!st.isMaximized());
             }
@@ -239,7 +283,7 @@ public class MainController implements Initializable {
     /** Sincroniza el icono del botón maximizar con el estado actual de la ventana. */
     private void syncMaximizeIcon(javafx.stage.Stage st) {
         Platform.runLater(() -> btnMaximize.setText(
-            (st.isMaximized() || st.isFullScreen()) ? "❐" : ""
+            (st.isMaximized() || fakeFullScreen) ? "❐" : ""
         ));
     }
 
@@ -247,19 +291,19 @@ public class MainController implements Initializable {
         titleBar.setOnMousePressed(e -> {
             titleBarDragging = false;
             if (resizeHelper != null && resizeHelper.isActive()) return;
-            if (stage().isMaximized() || stage().isFullScreen()) return;
+            if (stage().isMaximized() || fakeFullScreen) return;
             windowX = e.getSceneX(); windowY = e.getSceneY();
         });
         titleBar.setOnMouseDragged(e -> {
             if (resizeHelper != null && resizeHelper.isActive()) return;
             titleBarDragging = true;
             javafx.stage.Stage st = stage();
-            if (st.isFullScreen()) {
-                // Exit fullscreen when dragged more than 60 px below this screen's top edge
+            if (fakeFullScreen) {
+                // Exit fake fullscreen when dragged more than 60 px below this screen's top edge
                 javafx.stage.Screen scr = screenAt(e.getScreenX(), e.getScreenY());
                 if (e.getScreenY() > scr.getBounds().getMinY() + 60) {
                     double ratio = (e.getScreenX() - scr.getBounds().getMinX()) / scr.getBounds().getWidth();
-                    st.setFullScreen(false);
+                    setFakeFullScreen(st, false);
                     windowX = st.getWidth() * ratio;
                     windowY = e.getSceneY();
                     // fall through to reposition
@@ -281,11 +325,7 @@ public class MainController implements Initializable {
                 // Snap to fullscreen when released within 10 px of the top edge of any screen
                 javafx.stage.Screen scr = screenAt(e.getScreenX(), e.getScreenY());
                 if (e.getScreenY() <= scr.getBounds().getMinY() + 10) {
-                    javafx.stage.Stage st = stage();
-                    // Position the stage on the target screen before going fullscreen
-                    st.setX(scr.getBounds().getMinX());
-                    st.setY(scr.getBounds().getMinY());
-                    st.setFullScreen(true);
+                    setFakeFullScreen(stage(), true, scr);
                 }
             }
             titleBarDragging = false;
@@ -299,6 +339,225 @@ public class MainController implements Initializable {
     private javafx.stage.Screen screenAt(double sx, double sy) {
         return javafx.stage.Screen.getScreensForRectangle(sx, sy, 1, 1)
                 .stream().findFirst().orElse(javafx.stage.Screen.getPrimary());
+    }
+
+    private void applyTheme(javafx.scene.Scene sc) {
+        StringBuilder sb = new StringBuilder();
+        currentTheme.forEach((k, v) -> sb.append(k).append(": ").append(v).append("; "));
+        sc.getRoot().setStyle(sb.toString());
+        applyContrastStrokes();
+    }
+
+    private void applyContrastStrokes() {
+        applyContrastStroke(sidebar,       "bardo-text", "bardo-sidebar-bg");
+        applyContrastStroke(tabBarScroll,  "bardo-text", "bardo-sidebar-bg");
+        applyContrastStroke(nowPlayingBar, "bardo-text", "bardo-player-bg1");
+        Set<javafx.scene.Node> playerPanels = activePlayers.stream()
+            .filter(pi -> pi.panel != null)
+            .map(pi -> (javafx.scene.Node) pi.panel)
+            .collect(Collectors.toSet());
+        for (javafx.scene.Node child : contentArea.getChildren()) {
+            if (playerPanels.contains(child))
+                applyContrastStroke(child, "bardo-text", "bardo-player-bg1");
+            else
+                applyContrastStroke(child, "bardo-text", "bardo-bg");
+        }
+    }
+
+    private void applyContrastStroke(javafx.scene.Node container, String textVar, String bgVar) {
+        if (container == null) return;
+        container.getStyleClass().removeAll("bardo-contrast-dark", "bardo-contrast-light");
+        if (!textContrastEnabled) return;
+        javafx.scene.paint.Color tc = tryParseColor(currentTheme.getOrDefault(textVar, "#5a4a6a"));
+        javafx.scene.paint.Color bc = tryParseColor(currentTheme.getOrDefault(bgVar,   "#faf8fc"));
+        if (contrastRatio(tc, bc) >= CONTRAST_THRESHOLD) return;
+        double avgLum = (relativeLuminance(tc) + relativeLuminance(bc)) / 2.0;
+        container.getStyleClass().add(avgLum > 0.5 ? "bardo-contrast-dark" : "bardo-contrast-light");
+    }
+
+    private static double contrastRatio(javafx.scene.paint.Color a, javafx.scene.paint.Color b) {
+        double la = relativeLuminance(a) + 0.05, lb = relativeLuminance(b) + 0.05;
+        return la > lb ? la / lb : lb / la;
+    }
+
+    private static double relativeLuminance(javafx.scene.paint.Color c) {
+        return 0.2126 * linearize(c.getRed()) + 0.7152 * linearize(c.getGreen()) + 0.0722 * linearize(c.getBlue());
+    }
+
+    private static double linearize(double ch) {
+        return ch <= 0.04045 ? ch / 12.92 : Math.pow((ch + 0.055) / 1.055, 2.4);
+    }
+
+    private void applyTheme() {
+        if (contentArea.getScene() != null) applyTheme(contentArea.getScene());
+    }
+
+    private void debouncedSaveTheme() {
+        if (themeSavePause == null) {
+            themeSavePause = new PauseTransition(Duration.millis(500));
+            themeSavePause.setOnFinished(e -> libraryService.saveTheme(baseTheme));
+        }
+        themeSavePause.playFromStart();
+    }
+
+    private static String defaultModeFor(String varName) {
+        return switch (varName) {
+            case "bardo-accent", "bardo-player-bg1"  -> DYN_PRIMARY;
+            case "bardo-accent2", "bardo-player-bg2" -> DYN_SECONDARY;
+            default -> DYN_STATIC;
+        };
+    }
+
+    private static javafx.scene.paint.Color tryParseColor(String hex) {
+        try { return javafx.scene.paint.Color.web(hex); }
+        catch (Exception e) { return javafx.scene.paint.Color.web("#ffffff"); }
+    }
+
+    private static String colorToHex(javafx.scene.paint.Color c) {
+        return String.format("#%02x%02x%02x",
+            (int) Math.round(c.getRed()   * 255),
+            (int) Math.round(c.getGreen() * 255),
+            (int) Math.round(c.getBlue()  * 255));
+    }
+
+    /** Fades a single theme variable from its current value to {@code toHex} over ~700 ms. */
+    private void fadeThemeVar(String varName, String toHex) {
+        String fromHex = currentTheme.getOrDefault(varName, toHex);
+        Timeline existing = colorFadeTimelines.get(varName);
+        if (existing != null) existing.stop();
+        if (fromHex.equalsIgnoreCase(toHex)) {
+            currentTheme.put(varName, toHex); applyTheme(); return;
+        }
+        try {
+            int fr = Integer.parseInt(fromHex.substring(1, 3), 16);
+            int fg = Integer.parseInt(fromHex.substring(3, 5), 16);
+            int fb = Integer.parseInt(fromHex.substring(5, 7), 16);
+            int tr = Integer.parseInt(toHex.substring(1, 3), 16);
+            int tg = Integer.parseInt(toHex.substring(3, 5), 16);
+            int tb = Integer.parseInt(toHex.substring(5, 7), 16);
+            Timeline tl = new Timeline();
+            int STEPS = 20;
+            for (int i = 1; i <= STEPS; i++) {
+                final double t = (double) i / STEPS;
+                final int r = (int) Math.round(fr + (tr - fr) * t);
+                final int g = (int) Math.round(fg + (tg - fg) * t);
+                final int b = (int) Math.round(fb + (tb - fb) * t);
+                tl.getKeyFrames().add(new KeyFrame(Duration.millis(700 * t), ev -> {
+                    currentTheme.put(varName, String.format("#%02x%02x%02x", r, g, b));
+                    applyTheme();
+                }));
+            }
+            colorFadeTimelines.put(varName, tl);
+            tl.setOnFinished(e -> colorFadeTimelines.remove(varName));
+            tl.play();
+        } catch (Exception ex) {
+            currentTheme.put(varName, toHex); applyTheme();
+        }
+    }
+
+    private void fadeAllToBase() {
+        for (String[] tv : THEME_VARS) {
+            String varName = tv[0];
+            if (DYN_STATIC.equals(themeVarModes.getOrDefault(varName, DYN_STATIC))) continue;
+            fadeThemeVar(varName, baseTheme.getOrDefault(varName, tv[1]));
+        }
+    }
+
+    private void updateDynamicColors() {
+        if (!dynamicColorsEnabled) { fadeAllToBase(); return; }
+        boolean anyDynamic = themeVarModes.values().stream().anyMatch(m -> !DYN_STATIC.equals(m));
+        if (!anyDynamic) return;
+        PlayerInstance pi = focusedPlayer;
+        if (pi == null || !pi.isPlaying || pi.song == null ||
+                pi.song.getThumbnailUrl() == null || pi.song.getThumbnailUrl().isBlank()) {
+            fadeAllToBase(); return;
+        }
+        final String thumbUrl = pi.song.getThumbnailUrl();
+        final PlayerInstance captured = pi;
+        Thread extractor = new Thread(() -> {
+            try {
+                javafx.scene.image.Image img = new javafx.scene.image.Image(thumbUrl, 128, 128, false, true);
+                List<javafx.scene.paint.Color> colors = img.isError() ? List.of() : extractDominantColors(img, 2);
+                Platform.runLater(() -> {
+                    if (focusedPlayer != captured) return;
+                    if (colors.isEmpty()) { fadeAllToBase(); return; }
+                    applyDynamicColors(colors);
+                });
+            } catch (Exception e) {
+                Platform.runLater(this::fadeAllToBase);
+            }
+        }, "bardo-color-extractor");
+        extractor.setDaemon(true);
+        extractor.start();
+    }
+
+    private void applyDynamicColors(List<javafx.scene.paint.Color> colors) {
+        for (String[] tv : THEME_VARS) {
+            String varName = tv[0];
+            String mode = themeVarModes.getOrDefault(varName, DYN_STATIC);
+            if (DYN_STATIC.equals(mode)) continue;
+            int idx = DYN_PRIMARY.equals(mode) ? 0 : 1;
+            if (idx >= colors.size()) idx = 0;
+            fadeThemeVar(varName, colorToHex(colors.get(idx)));
+        }
+    }
+
+    private static List<javafx.scene.paint.Color> extractDominantColors(javafx.scene.image.Image img, int count) {
+        if (img == null || img.isError() || img.getWidth() == 0) return List.of();
+        javafx.scene.image.PixelReader pr = img.getPixelReader();
+        int w = (int) img.getWidth(), h = (int) img.getHeight();
+        java.util.Map<Integer, double[]> buckets = new java.util.HashMap<>();
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                javafx.scene.paint.Color c = pr.getColor(x, y);
+                if (c.getSaturation() < 0.2 || c.getBrightness() < 0.2 || c.getBrightness() > 0.92) continue;
+                int hb = (int) (c.getHue() / 20); // 18 hue buckets of 20°
+                buckets.computeIfAbsent(hb, k -> new double[4]);
+                double[] acc = buckets.get(hb);
+                acc[0] += c.getRed(); acc[1] += c.getGreen(); acc[2] += c.getBlue(); acc[3]++;
+            }
+        }
+        if (buckets.isEmpty()) return List.of();
+        List<java.util.Map.Entry<Integer, double[]>> entries = new java.util.ArrayList<>(buckets.entrySet());
+        entries.sort((a, b) -> Double.compare(b.getValue()[3], a.getValue()[3]));
+        List<javafx.scene.paint.Color> result = new java.util.ArrayList<>();
+        List<Integer> usedHueBuckets = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<Integer, double[]> e : entries) {
+            int hb = e.getKey();
+            boolean tooClose = usedHueBuckets.stream().anyMatch(u -> {
+                int d = Math.abs(hb - u); return Math.min(d, 18 - d) < 3;
+            });
+            if (tooClose) continue;
+            usedHueBuckets.add(hb);
+            double[] acc = e.getValue(); double n = acc[3];
+            result.add(javafx.scene.paint.Color.color(
+                Math.min(1, acc[0] / n), Math.min(1, acc[1] / n), Math.min(1, acc[2] / n)));
+            if (result.size() >= count) break;
+        }
+        return result;
+    }
+
+    private void setFakeFullScreen(javafx.stage.Stage st, boolean enter) {
+        setFakeFullScreen(st, enter, null);
+    }
+
+    private void setFakeFullScreen(javafx.stage.Stage st, boolean enter, javafx.stage.Screen targetScreen) {
+        if (enter == fakeFullScreen) return;
+        fakeFullScreen = enter;
+        if (enter) {
+            savedStageX = st.getX(); savedStageY = st.getY();
+            savedStageW = st.getWidth(); savedStageH = st.getHeight();
+            if (st.isMaximized()) st.setMaximized(false);
+            javafx.stage.Screen scr = targetScreen != null ? targetScreen
+                : screenAt(st.getX() + st.getWidth() / 2, st.getY() + st.getHeight() / 2);
+            javafx.geometry.Rectangle2D b = scr.getBounds();
+            st.setX(b.getMinX()); st.setY(b.getMinY());
+            st.setWidth(b.getWidth()); st.setHeight(b.getHeight());
+        } else {
+            st.setX(savedStageX); st.setY(savedStageY);
+            st.setWidth(savedStageW); st.setHeight(savedStageH);
+        }
+        syncMaximizeIcon(st);
     }
 
     private void setupProgressSlider() {
@@ -468,7 +727,139 @@ public class MainController implements Initializable {
 
         VBox apiSection = new VBox(8, apiSectionLbl, apiDescLbl, apiRow, apiStatusLbl);
 
-        settingsPanel.getChildren().setAll(header, section, settingsSep, apiSection);
+        // ── Appearance section ────────────────────────────────────────────────
+        Label appearanceSectionLbl = new Label("APARIENCIA");
+        appearanceSectionLbl.getStyleClass().add("sidebar-section-label");
+
+        Label appearanceDesc = new Label("Personaliza los colores de la interfaz. Los cambios se aplican al instante.");
+        appearanceDesc.setWrapText(true);
+        appearanceDesc.getStyleClass().add("greeting-sub");
+
+        CheckBox dynColorsCheck = new CheckBox("Colores dinámicos");
+        dynColorsCheck.setSelected(dynamicColorsEnabled);
+        dynColorsCheck.getStyleClass().add("greeting-sub");
+        Label dynColorsDesc = new Label("Cuando está activo, los colores marcados con un selector de modo cambian automáticamente con la miniatura de la canción en reproducción.");
+        dynColorsDesc.setWrapText(true);
+        dynColorsDesc.getStyleClass().add("greeting-sub");
+        dynColorsCheck.setOnAction(e -> {
+            dynamicColorsEnabled = dynColorsCheck.isSelected();
+            libraryService.saveDynamicColorsEnabled(dynamicColorsEnabled);
+            updateDynamicColors();
+        });
+
+        CheckBox textContrastCheck = new CheckBox("Contraste de texto automático");
+        textContrastCheck.setSelected(textContrastEnabled);
+        textContrastCheck.getStyleClass().add("greeting-sub");
+        Label textContrastDesc = new Label("Añade un borde fino alrededor del texto cuando el color del texto y el fondo son demasiado similares, para garantizar la legibilidad.");
+        textContrastDesc.setWrapText(true);
+        textContrastDesc.getStyleClass().add("greeting-sub");
+        textContrastCheck.setOnAction(e -> {
+            textContrastEnabled = textContrastCheck.isSelected();
+            libraryService.saveTextContrastEnabled(textContrastEnabled);
+            applyTheme();
+        });
+
+        VBox colorRows = new VBox(10);
+        colorRows.setPadding(new javafx.geometry.Insets(4, 0, 4, 0));
+
+        List<javafx.scene.control.ColorPicker> pickers = new java.util.ArrayList<>();
+        List<javafx.scene.control.ComboBox<String>> modeCombos = new java.util.ArrayList<>();
+
+        for (String[] tv : THEME_VARS) {
+            Label lbl = new Label(tv[2]);
+            lbl.getStyleClass().add("greeting-sub");
+            lbl.setMinWidth(140);
+
+            javafx.scene.control.ColorPicker cp = new javafx.scene.control.ColorPicker(
+                tryParseColor(baseTheme.getOrDefault(tv[0], tv[1])));
+            cp.getStyleClass().addAll("theme-color-picker", "button");
+            cp.setPrefWidth(130);
+            pickers.add(cp);
+
+            javafx.scene.control.ComboBox<String> modeCombo = new javafx.scene.control.ComboBox<>(
+                FXCollections.observableArrayList("Estático", "Color primario de canción", "Color secundario de canción"));
+            String savedMode = themeVarModes.getOrDefault(tv[0], DYN_STATIC);
+            modeCombo.setValue(
+                DYN_PRIMARY.equals(savedMode)   ? "Color primario de canción" :
+                DYN_SECONDARY.equals(savedMode) ? "Color secundario de canción" : "Estático");
+            modeCombo.setPrefWidth(210);
+            modeCombos.add(modeCombo);
+
+            final String varName = tv[0];
+            final String defColor = tv[1];
+
+            Button resetColorBtn = new Button();
+            resetColorBtn.getStyleClass().add("color-reset-btn");
+            resetColorBtn.setStyle("-fx-background-color: " + defColor + ";");
+            resetColorBtn.setTooltip(new Tooltip("Restaurar color predeterminado"));
+            resetColorBtn.setOnAction(e -> cp.setValue(tryParseColor(defColor)));
+
+            cp.valueProperty().addListener((obs, old, col) -> {
+                String hex = colorToHex(col);
+                baseTheme.put(varName, hex);
+                if (DYN_STATIC.equals(themeVarModes.getOrDefault(varName, DYN_STATIC))) {
+                    currentTheme.put(varName, hex);
+                    applyTheme();
+                }
+                debouncedSaveTheme();
+            });
+            modeCombo.setOnAction(e -> {
+                String sel = modeCombo.getValue();
+                String mode = "Color primario de canción".equals(sel)   ? DYN_PRIMARY :
+                              "Color secundario de canción".equals(sel) ? DYN_SECONDARY : DYN_STATIC;
+                themeVarModes.put(varName, mode);
+                libraryService.saveThemeVarModes(themeVarModes);
+                updateDynamicColors();
+            });
+
+            HBox row = new HBox(12, lbl, cp, resetColorBtn, modeCombo);
+            row.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+            colorRows.getChildren().add(row);
+        }
+
+        Button resetThemeBtn = new Button("↺  Restaurar colores predeterminados");
+        resetThemeBtn.getStyleClass().add("btn-secondary");
+        resetThemeBtn.setOnAction(e -> {
+            for (int i = 0; i < THEME_VARS.length; i++) {
+                String var = THEME_VARS[i][0], def = THEME_VARS[i][1];
+                baseTheme.put(var, def);
+                currentTheme.put(var, def);
+                pickers.get(i).setValue(tryParseColor(def));
+                String defMode = defaultModeFor(var);
+                themeVarModes.put(var, defMode);
+                modeCombos.get(i).setValue(DYN_PRIMARY.equals(defMode)   ? "Color primario de canción" :
+                                           DYN_SECONDARY.equals(defMode) ? "Color secundario de canción" : "Estático");
+            }
+            dynamicColorsEnabled = true;
+            dynColorsCheck.setSelected(true);
+            textContrastEnabled = true;
+            textContrastCheck.setSelected(true);
+            applyTheme();
+            updateDynamicColors();
+            debouncedSaveTheme();
+            libraryService.saveThemeVarModes(themeVarModes);
+            libraryService.saveDynamicColorsEnabled(true);
+            libraryService.saveTextContrastEnabled(true);
+        });
+
+        VBox appearanceSection = new VBox(8, appearanceSectionLbl, appearanceDesc,
+            dynColorsCheck, dynColorsDesc, textContrastCheck, textContrastDesc,
+            colorRows, resetThemeBtn);
+
+        Separator appearanceSep = new Separator();
+        appearanceSep.setPadding(new javafx.geometry.Insets(8, 0, 8, 0));
+
+        // Wrap all content in a ScrollPane so it scrolls on small screens
+        VBox scrollContent = new VBox(24, header, section, settingsSep, apiSection, appearanceSep, appearanceSection);
+        scrollContent.setPadding(new javafx.geometry.Insets(28, 28, 28, 28));
+
+        ScrollPane settingsScroll = new ScrollPane(scrollContent);
+        settingsScroll.setFitToWidth(true);
+        settingsScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        settingsScroll.getStyleClass().add("results-scroll");
+        VBox.setVgrow(settingsScroll, Priority.ALWAYS);
+
+        settingsPanel.getChildren().setAll(settingsScroll);
     }
 
     // ── Tab system ────────────────────────────────────────────────────────────
@@ -503,7 +894,7 @@ public class MainController implements Initializable {
         }
         updateMiniPlayerVisibility();
 
-        for (Button b : new Button[]{btnHome, btnLibrary}) b.getStyleClass().remove("nav-btn-active");
+        for (Button b : new Button[]{btnHome, btnLibrary, btnSettings}) b.getStyleClass().remove("nav-btn-active");
         if (tab.sidebarBtn != null) tab.sidebarBtn.getStyleClass().add("nav-btn-active");
 
         rebuildTabBar();
@@ -731,6 +1122,7 @@ public class MainController implements Initializable {
             (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
             p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
         );
+        applyContrastStroke(pi.panel, "bardo-text", "bardo-player-bg1");
     }
 
     private void navigateTab(int direction) {
@@ -842,7 +1234,7 @@ public class MainController implements Initializable {
             pi.mediaPlayer.play();
             pi.isPlaying = true;
             applyVolumesToAll();
-            if (pi == focusedPlayer) addGlowEffect();
+            if (pi == focusedPlayer) { addGlowEffect(); updateDynamicColors(); }
             updatePlayPauseButton(); rebuildTabBar();
         } else {
             fadeOutAndPause(pi);
@@ -911,6 +1303,7 @@ public class MainController implements Initializable {
             pi.fadeOutAnim = null;
             applyVolumesToAll();
             rebuildTabBar();
+            if (pi == focusedPlayer || focusedPlayer == null) updateDynamicColors();
         });
         pi.fadeOutAnim.play();
     }
@@ -921,6 +1314,7 @@ public class MainController implements Initializable {
         startWaveDecay(pi);
         if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
         pickBestFocusedPlayer();
+        updateDynamicColors();
     }
 
     private void updateProgressUI(PlayerInstance pi, Duration current) {
@@ -1075,6 +1469,7 @@ public class MainController implements Initializable {
         if (pi.isPlaying) addGlowEffect(); else removeGlowEffect();
         drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
         updatePlayPauseButton(); updateLoopButtons();
+        updateDynamicColors();
     }
 
     @FXML private void onSwitchFocusedPlayer() {
@@ -1093,6 +1488,7 @@ public class MainController implements Initializable {
         List<PlayerInstance> candidates = activePlayers.stream().filter(p -> !p.isMashupLinked).collect(Collectors.toList());
         if (candidates.isEmpty()) {
             focusedPlayer = null; removeGlowEffect();
+            fadeAllToBase();
             updatePlayPauseButton(); updateMiniPlayerVisibility(); return;
         }
         PlayerInstance best = null;
@@ -1317,6 +1713,7 @@ public class MainController implements Initializable {
             songs -> openMashupPlayer(songs.get(0), songs.get(1)),
             libraryService, this::showToast);
         openTab(tabId, group.isYoutubePlaylist() ? "📺" : "📋", group.getName(), panel, true, btnLibrary);
+        applyContrastStroke(panel, "bardo-text", "bardo-bg");
     }
 
     private void openMashupPlayer(Song songA, Song songB) {
@@ -1658,7 +2055,7 @@ public class MainController implements Initializable {
             case RIGHT  -> { seekRelative( 5); e.consume(); }
             case UP     -> { adjustVolume( 1); e.consume(); }
             case DOWN   -> { adjustVolume(-1); e.consume(); }
-            case F11    -> { javafx.stage.Stage st = stage(); st.setFullScreen(!st.isFullScreen()); e.consume(); }
+            case F11    -> { setFakeFullScreen(stage(), !fakeFullScreen); e.consume(); }
             default     -> {}
         }
     }

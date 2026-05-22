@@ -21,8 +21,17 @@ import java.util.function.Consumer;
 import javafx.collections.transformation.FilteredList;
 
 /**
- * Construye los paneles de la biblioteca: sección de grupo (fila en la lista)
- * y panel de detalle (lista de canciones con drag-to-reorder y checklist de playlists).
+ * Construye los paneles de la biblioteca: filas de grupo resumidas ({@link #groupSection})
+ * y el panel de detalle completo de una colección ({@link #detailPanel}).
+ *
+ * <p>El panel de detalle incluye:
+ * <ul>
+ *   <li>Barra de búsqueda case/accent-insensitive sobre la lista de canciones.</li>
+ *   <li>Reordenación por arrastre (drag-to-reorder) desactivada mientras la búsqueda esté activa.</li>
+ *   <li>Botón de pin (📌) en cada fila para añadir o quitar la canción de la pantalla de inicio.</li>
+ *   <li>Checklist de playlists para copiar/mover canciones entre colecciones.</li>
+ *   <li>Modo Mashup: selección de dos canciones para reproducirlas simultáneamente.</li>
+ * </ul>
  */
 public final class GroupDetailBuilder {
 
@@ -57,7 +66,7 @@ public final class GroupDetailBuilder {
 
         ComboBox<String> typeCombo = buildTypeCombo(group);
 
-        Label chevron = new Label("›"); chevron.setStyle("-fx-font-size: 20px; -fx-text-fill: #c0b0d0;");
+        Label chevron = new Label("›"); chevron.setStyle("-fx-font-size: 20px;"); chevron.getStyleClass().add("group-arrow");
         Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("group-remove-btn"); removeBtn.setOnAction(e -> onRemove.run());
 
         if (group.isYoutubePlaylist() && onRefreshYt != null) {
@@ -108,10 +117,10 @@ public final class GroupDetailBuilder {
                 onOpenMashup.accept(List.of(mashupSel[0], mashupSel[1]));
         });
         Label mashupHint = new Label("Selecciona dos canciones (① y ②) y pulsa el botón para reproducirlas juntas.");
-        mashupHint.setStyle("-fx-font-size:11px; -fx-text-fill:#a090b8;"); mashupHint.setWrapText(true);
+        mashupHint.getStyleClass().add("mashup-hint"); mashupHint.setWrapText(true);
         HBox mashupBar = new HBox(12, mashupHint, mashupPlayBtn[0]);
         mashupBar.setAlignment(Pos.CENTER_LEFT);
-        mashupBar.setStyle("-fx-background-color:#f8f0ff; -fx-border-color:#e8d8f4; -fx-border-width:1 0 1 0; -fx-padding:10 28;");
+        mashupBar.getStyleClass().add("mashup-bar");
         mashupBar.setVisible("Mashup".equals(group.getType()));
         mashupBar.setManaged("Mashup".equals(group.getType()));
         group.typeProperty().addListener((obs, old, t) -> {
@@ -357,7 +366,7 @@ public final class GroupDetailBuilder {
         HBox row = new HBox(12); row.getStyleClass().add("detail-song-row");
         row.setAlignment(Pos.CENTER_LEFT); row.setPadding(new Insets(0, 16, 0, 16));
         if (selBadge != null)
-            row.setStyle("-fx-background-color:" + ("①".equals(selBadge) ? "#fff0f5" : "#f0f5ff") + ";");
+            row.getStyleClass().add("①".equals(selBadge) ? "mashup-row-sel-a" : "mashup-row-sel-b");
 
         boolean hasThumb = song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank();
         if (hasThumb) {
@@ -385,7 +394,7 @@ public final class GroupDetailBuilder {
         // Selection badge button
         String btnText = selBadge != null ? selBadge : "○";
         Button selBtn = new Button(btnText); selBtn.getStyleClass().add("mashup-sel-btn");
-        if (selBadge != null) selBtn.setStyle("-fx-opacity:1.0; -fx-text-fill:" + ("①".equals(selBadge) ? "#e8729a" : "#6ba3d6") + ";");
+        if (selBadge != null) selBtn.getStyleClass().add("①".equals(selBadge) ? "mashup-sel-btn-active-a" : "mashup-sel-btn-active-b");
         selBtn.setOnAction(e -> onSelect.run());
         row.getChildren().add(selBtn);
 

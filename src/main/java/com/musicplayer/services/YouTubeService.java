@@ -21,6 +21,27 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+/**
+ * Cliente de la YouTube Data API v3 que expone búsquedas de vídeos y playlists,
+ * obtención paginada de los elementos de una playlist y resolución directa por ID.
+ *
+ * <p>Todas las operaciones de red se ejecutan en hilos del pool común mediante
+ * {@link java.util.concurrent.CompletableFuture#supplyAsync}; las actualizaciones
+ * de UI deben envolverse en {@code Platform.runLater()}.
+ *
+ * <p>Los errores HTTP (código no 2xx) y de red se propagan como {@link RuntimeException}
+ * dentro del {@code CompletableFuture}; el llamador debe encadenar {@code .exceptionally()}
+ * para tratarlos (ver usos en {@code MainController}).
+ *
+ * <p>Métodos públicos:
+ * <ul>
+ *   <li>{@link #search} — búsqueda de vídeos por texto (categoría música).</li>
+ *   <li>{@link #searchPlaylists} — búsqueda de playlists con recuento de ítems.</li>
+ *   <li>{@link #getPlaylistItems} — obtiene todas las páginas de una playlist.</li>
+ *   <li>{@link #getVideoById} — resuelve un vídeo por ID, incluye duración ISO 8601.</li>
+ *   <li>{@link #getPlaylistById} — resuelve una playlist por su ID.</li>
+ * </ul>
+ */
 public class YouTubeService {
 
     private static final String BASE_URL = "https://www.googleapis.com/youtube/v3";

@@ -10,8 +10,15 @@ import javafx.scene.shape.Circle;
 import javafx.scene.text.TextAlignment;
 
 /**
- * Builds the Mashup player panel (two songs played simultaneously).
- * UI refs are stored on piA (primary); piB.panelVolumeSlider is also assigned.
+ * Construye el panel del reproductor Mashup, que reproduce dos canciones simultáneamente
+ * con sliders de volumen independientes y un botón de crossfade.
+ *
+ * <p>Las referencias UI se almacenan en {@code piA} (reproductor primario).
+ * Excepcionalmente, {@code piB.panelVolumeSlider} también se asigna para que
+ * {@code MainController} pueda actualizar el volumen de la canción secundaria.
+ *
+ * <p>El crossfade intercambia los volúmenes de {@code piA} y {@code piB} en 1,5 s
+ * mediante una animación gestionada en {@code MainController.crossfade()}.
  */
 public final class MashupPanelBuilder {
 

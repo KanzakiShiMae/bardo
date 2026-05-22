@@ -19,8 +19,12 @@ import java.util.function.Consumer;
  * Fábrica de tarjetas visuales para los paneles de búsqueda e inicio.
  *
  * <p>Todos los métodos son estáticos y devuelven nodos JavaFX listos para insertar
- * en un {@code FlowPane}. Las acciones se pasan como lambdas para desacoplar la
- * lógica de negocio de la construcción de la UI.
+ * en un {@link javafx.scene.layout.FlowPane}. Las acciones se pasan como lambdas
+ * para desacoplar la lógica de negocio de la presentación.
+ *
+ * <p>Cuando se proporciona un {@link com.musicplayer.services.LibraryService} a
+ * {@link #songCard}, se añade un botón de pin (📌/📍) que persiste el estado
+ * pineado directamente a través del servicio.
  */
 public final class CardBuilder {
 
@@ -28,12 +32,14 @@ public final class CardBuilder {
 
     /**
      * Crea una tarjeta de canción de YouTube con miniatura, título, canal y botones
-     * de enlace y "añadir a colección".
+     * de enlace, "añadir a colección" y (opcionalmente) pin.
      *
-     * @param song      datos de la canción
-     * @param onPlay    acción al hacer clic en la tarjeta (descargar y reproducir)
-     * @param onBrowser acción del botón 🔗 — recibe el {@code videoId}
-     * @param onAdd     acción del botón ＋ — recibe la canción y el nodo ancla
+     * @param song            datos de la canción
+     * @param onPlay          acción al hacer clic en la tarjeta (descargar y reproducir)
+     * @param onBrowser       acción del botón 🔗 — recibe el {@code videoId}
+     * @param onAdd           acción del botón ＋ — recibe la canción y el nodo ancla
+     * @param libraryService  servicio de biblioteca; si no es {@code null} se muestra
+     *                        el botón de pin que lee y actualiza el estado pineado
      */
     public static VBox songCard(Song song, Runnable onPlay,
                                 Consumer<String> onBrowser, BiConsumer<Song, Node> onAdd,

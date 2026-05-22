@@ -8,7 +8,25 @@ import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.util.Duration;
 import java.util.List;
+import java.util.Map;
 
+/**
+ * Servicio singleton que gestiona la biblioteca del usuario: colecciones de canciones,
+ * canciones pineadas y preferencias de reproducción.
+ *
+ * <p><b>Persistencia:</b> los cambios en grupos y canciones pineadas disparan un
+ * guardado diferido ({@link #debouncedSave()}) de 600 ms para evitar escrituras
+ * excesivas. Llama a {@link #save()} explícitamente cuando necesites que los datos
+ * se escriban de forma inmediata (p. ej. al resetear el contador de inicio).
+ *
+ * <p><b>Canciones pineadas:</b> {@link #pinSong(Song)} añade una canción a la lista de
+ * pineadas, visible en la pantalla de inicio. {@link #unpinSong(String)} la elimina.
+ * La lista se persiste junto con la biblioteca en {@code library.json}.
+ *
+ * <p><b>Contador de uso:</b> {@link LibraryGroup#incrementPlayCount()} se llama desde
+ * {@code MainController.downloadAndPlay()} cada vez que el usuario reproduce una canción
+ * de un grupo concreto; determina qué colecciones aparecen en la pantalla de inicio.
+ */
 public class LibraryService {
 
     private static LibraryService instance;
@@ -68,8 +86,16 @@ public class LibraryService {
     public void saveVolume(int pct)    { persistence.saveVolume(pct); }
     public int  loadAmbientDuck()        { return persistence.loadAmbientDuck(); }
     public void saveAmbientDuck(int p)   { persistence.saveAmbientDuck(p); }
-    public String loadYouTubeApiKey()    { return persistence.loadYouTubeApiKey(); }
-    public void saveYouTubeApiKey(String k) { persistence.saveYouTubeApiKey(k); }
+    public String loadYouTubeApiKey()        { return persistence.loadYouTubeApiKey(); }
+    public void saveYouTubeApiKey(String k)  { persistence.saveYouTubeApiKey(k); }
+    public Map<String, String> loadTheme()              { return persistence.loadTheme(); }
+    public void saveTheme(Map<String, String> theme)    { persistence.saveTheme(theme); }
+    public Map<String, String> loadThemeVarModes()              { return persistence.loadThemeVarModes(); }
+    public void saveThemeVarModes(Map<String, String> modes)    { persistence.saveThemeVarModes(modes); }
+    public boolean loadDynamicColorsEnabled()                   { return persistence.loadDynamicColorsEnabled(); }
+    public void saveDynamicColorsEnabled(boolean enabled)       { persistence.saveDynamicColorsEnabled(enabled); }
+    public boolean loadTextContrastEnabled()                    { return persistence.loadTextContrastEnabled(); }
+    public void saveTextContrastEnabled(boolean enabled)        { persistence.saveTextContrastEnabled(enabled); }
 
     /** Agrupa ráfagas de cambios en una sola escritura a disco tras 600 ms de inactividad. */
     private void debouncedSave() {

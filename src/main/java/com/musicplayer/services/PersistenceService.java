@@ -9,8 +9,23 @@ import java.io.IOException;
 import java.lang.reflect.Type;
 import java.nio.file.*;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+/**
+ * Capa de acceso a disco para la biblioteca y la configuración de la aplicación.
+ *
+ * <p>Escribe dos archivos JSON en el directorio de datos del usuario:
+ * <ul>
+ *   <li>{@code %APPDATA%\Bardo\library.json} — grupos, canciones y canciones pineadas.</li>
+ *   <li>{@code %APPDATA%\Bardo\settings.json} — volumen, ducking de ambiente y clave de API.</li>
+ * </ul>
+ *
+ * <p>No mantiene estado interno; cada llamada es independiente. Los DTOs privados
+ * ({@code GroupDto}, {@code SongDto}, {@code LibraryDto}, {@code SettingsDto}) sólo se
+ * usan para serialización Gson y no forman parte de la API pública.
+ */
 public class PersistenceService {
 
     private static final Path SAVE_FILE;
@@ -30,9 +45,13 @@ public class PersistenceService {
     // ── Settings ──────────────────────────────────────────────────────────────
 
     private static class SettingsDto {
-        int    volume       = 70;
-        int    ambientDuck  = 60;
+        int    volume        = 70;
+        int    ambientDuck   = 60;
         String youtubeApiKey = "";
+        Map<String, String> theme         = new HashMap<>();
+        Map<String, String> themeVarModes = new HashMap<>();
+        boolean dynamicColorsEnabled      = true;
+        boolean textContrastEnabled       = true;
     }
 
     private SettingsDto loadSettingsDto() {
@@ -83,6 +102,48 @@ public class PersistenceService {
     public String loadYouTubeApiKey() {
         String key = loadSettingsDto().youtubeApiKey;
         return key != null ? key : "";
+    }
+
+    public void saveTheme(Map<String, String> theme) {
+        SettingsDto dto = loadSettingsDto();
+        dto.theme = new HashMap<>(theme);
+        writeSettings(dto);
+    }
+
+    public Map<String, String> loadTheme() {
+        SettingsDto dto = loadSettingsDto();
+        return dto.theme != null ? dto.theme : new HashMap<>();
+    }
+
+    public void saveThemeVarModes(Map<String, String> modes) {
+        SettingsDto dto = loadSettingsDto();
+        dto.themeVarModes = new HashMap<>(modes);
+        writeSettings(dto);
+    }
+
+    public Map<String, String> loadThemeVarModes() {
+        SettingsDto dto = loadSettingsDto();
+        return dto.themeVarModes != null ? dto.themeVarModes : new HashMap<>();
+    }
+
+    public void saveDynamicColorsEnabled(boolean enabled) {
+        SettingsDto dto = loadSettingsDto();
+        dto.dynamicColorsEnabled = enabled;
+        writeSettings(dto);
+    }
+
+    public boolean loadDynamicColorsEnabled() {
+        return loadSettingsDto().dynamicColorsEnabled;
+    }
+
+    public void saveTextContrastEnabled(boolean enabled) {
+        SettingsDto dto = loadSettingsDto();
+        dto.textContrastEnabled = enabled;
+        writeSettings(dto);
+    }
+
+    public boolean loadTextContrastEnabled() {
+        return loadSettingsDto().textContrastEnabled;
     }
 
     // ── DTOs ─────────────────────────────────────────────────────────────────

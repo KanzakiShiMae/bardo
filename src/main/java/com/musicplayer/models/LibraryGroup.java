@@ -5,6 +5,21 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import java.util.UUID;
 
+/**
+ * Colección de canciones que puede ser una lista personalizada del usuario
+ * o una playlist importada de YouTube.
+ *
+ * <p>Cada grupo tiene un identificador estable ({@link #getId()}):
+ * para playlists de YouTube es el {@code playlistId} de la API; para colecciones
+ * locales es un UUID generado en la creación.
+ *
+ * <p>{@link #playCount} acumula el número de canciones de este grupo que han
+ * sido reproducidas; se usa para determinar las "colecciones más escuchadas"
+ * en la pantalla de inicio. Al eliminar una colección del inicio se resetea a 0.
+ *
+ * <p>El campo {@link #type} ("Música", "Ambiente" o "Mashup") se propaga
+ * automáticamente a todas las canciones del grupo cuando se cambia.
+ */
 public class LibraryGroup {
 
     private final StringProperty id;
