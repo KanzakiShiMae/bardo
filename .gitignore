@@ -1,6 +1,8 @@
 # ── Build output ─────────────────────────────────────────────
 target/
 *.class
+bardo.jar
+dependency-reduced-pom.xml
 
 # ── IDE ──────────────────────────────────────────────────────
 .idea/
