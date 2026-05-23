@@ -91,7 +91,14 @@ public class ThemeManager {
     /** Si {@code false}, no se aplica ningún shadow de contraste al texto. */
     boolean textContrastEnabled  = true;
 
-    private final Map<String, Timeline> colorFadeTimelines = new HashMap<>();
+    private static final long FADE_DURATION_NS = 700_000_000L;
+
+    /**
+     * Estado activo de cada fade: {@code double[7] = {fromR, fromG, fromB, toR, toG, toB, startNanos}}.
+     * {@code startNanos == -1} indica que aún no ha empezado (se inicializa en el primer frame).
+     */
+    private final Map<String, double[]> activeFades = new LinkedHashMap<>();
+    private AnimationTimer colorFadeTimer;
     private PauseTransition themeSavePause;
 
     // ── Dependencias ──────────────────────────────────────────────────────────
@@ -154,15 +161,29 @@ public class ThemeManager {
      * y recalcula el contraste de texto en todos los contenedores.
      */
     void applyTheme(Scene sc) {
-        StringBuilder sb = new StringBuilder();
-        currentTheme.forEach((k, v) -> sb.append(k).append(": ").append(v).append("; "));
-        sc.getRoot().setStyle(sb.toString());
+        applyThemeStyle(sc);
         applyContrastStrokes();
     }
 
     /** Versión sin parámetro; usa la escena del {@code contentArea}. */
     void applyTheme() {
         if (contentArea.getScene() != null) applyTheme(contentArea.getScene());
+    }
+
+    /**
+     * Actualiza solo las variables CSS en la raíz de la escena sin recalcular el
+     * contraste de texto. Se usa dentro de las animaciones de fade para evitar
+     * disparar un layout pass completo en cada fotograma.
+     */
+    private void applyThemeStyle() {
+        Scene sc = contentArea.getScene();
+        if (sc != null) applyThemeStyle(sc);
+    }
+
+    private void applyThemeStyle(Scene sc) {
+        StringBuilder sb = new StringBuilder();
+        currentTheme.forEach((k, v) -> sb.append(k).append(": ").append(v).append("; "));
+        sc.getRoot().setStyle(sb.toString());
     }
 
     /**
@@ -271,42 +292,61 @@ public class ThemeManager {
     }
 
     /**
-     * Anima la variable {@code varName} desde su color actual hasta {@code toHex}
-     * en ~700 ms (20 pasos). Si ya hay una animación en curso para esa variable, la
-     * detiene antes de iniciar la nueva.
+     * Registra una transición de color para {@code varName} hacia {@code toHex}.
+     * Todas las transiciones activas se animan juntas en un único {@link AnimationTimer}
+     * que llama a {@link #applyThemeStyle()} una sola vez por frame nativo (~60 fps).
+     * Si ya había una transición en curso para la misma variable, se sobreescribe
+     * partiendo del color interpolado en ese instante.
      */
     void fadeThemeVar(String varName, String toHex) {
         String fromHex = currentTheme.getOrDefault(varName, toHex);
-        Timeline existing = colorFadeTimelines.get(varName);
-        if (existing != null) existing.stop();
         if (fromHex.equalsIgnoreCase(toHex)) {
-            currentTheme.put(varName, toHex); applyTheme(); return;
+            activeFades.remove(varName);
+            currentTheme.put(varName, toHex);
+            applyThemeStyle();
+            applyContrastStrokes();
+            return;
         }
         try {
-            int fr = Integer.parseInt(fromHex.substring(1, 3), 16);
-            int fg = Integer.parseInt(fromHex.substring(3, 5), 16);
-            int fb = Integer.parseInt(fromHex.substring(5, 7), 16);
-            int tr = Integer.parseInt(toHex.substring(1, 3), 16);
-            int tg = Integer.parseInt(toHex.substring(3, 5), 16);
-            int tb = Integer.parseInt(toHex.substring(5, 7), 16);
-            Timeline tl = new Timeline();
-            int STEPS = 20;
-            for (int i = 1; i <= STEPS; i++) {
-                final double t = (double) i / STEPS;
-                final int r = (int) Math.round(fr + (tr - fr) * t);
-                final int g = (int) Math.round(fg + (tg - fg) * t);
-                final int b = (int) Math.round(fb + (tb - fb) * t);
-                tl.getKeyFrames().add(new KeyFrame(Duration.millis(700 * t), ev -> {
-                    currentTheme.put(varName, String.format("#%02x%02x%02x", r, g, b));
-                    applyTheme();
-                }));
-            }
-            colorFadeTimelines.put(varName, tl);
-            tl.setOnFinished(e -> colorFadeTimelines.remove(varName));
-            tl.play();
+            double fr = Integer.parseInt(fromHex.substring(1, 3), 16);
+            double fg = Integer.parseInt(fromHex.substring(3, 5), 16);
+            double fb = Integer.parseInt(fromHex.substring(5, 7), 16);
+            double tr = Integer.parseInt(toHex.substring(1, 3), 16);
+            double tg = Integer.parseInt(toHex.substring(3, 5), 16);
+            double tb = Integer.parseInt(toHex.substring(5, 7), 16);
+            activeFades.put(varName, new double[]{fr, fg, fb, tr, tg, tb, -1});
+            ensureFadeTimerRunning();
         } catch (Exception ex) {
             currentTheme.put(varName, toHex); applyTheme();
         }
+    }
+
+    private void ensureFadeTimerRunning() {
+        if (colorFadeTimer != null) return;
+        colorFadeTimer = new AnimationTimer() {
+            @Override public void handle(long now) {
+                boolean anyActive = false;
+                var it = activeFades.entrySet().iterator();
+                while (it.hasNext()) {
+                    var entry = it.next();
+                    double[] s = entry.getValue();
+                    if (s[6] < 0) s[6] = now;
+                    double t = Math.min(1.0, (now - s[6]) / (double) FADE_DURATION_NS);
+                    int r = (int) Math.round(s[0] + (s[3] - s[0]) * t);
+                    int g = (int) Math.round(s[1] + (s[4] - s[1]) * t);
+                    int b = (int) Math.round(s[2] + (s[5] - s[2]) * t);
+                    currentTheme.put(entry.getKey(), String.format("#%02x%02x%02x", r, g, b));
+                    if (t >= 1.0) it.remove(); else anyActive = true;
+                }
+                applyThemeStyle();
+                if (!anyActive) {
+                    stop();
+                    colorFadeTimer = null;
+                    applyContrastStrokes();
+                }
+            }
+        };
+        colorFadeTimer.start();
     }
 
     private void applyDynamicColors(List<Color> colors) {
