@@ -20,7 +20,7 @@ import java.util.function.Consumer;
  *
  * <p>El panel contiene:
  * <ul>
- *   <li>Miniatura cuadrada con esquinas redondeadas (200×200 px).</li>
+ *   <li>Miniatura 16:9 (320×180 px) con esquinas redondeadas.</li>
  *   <li>Canvas de forma de onda ({@code panelWaveCanvas}, 340×64 px) actualizado en tiempo
  *       real desde el {@code AudioSpectrumListener} del {@code MediaPlayer}.</li>
  *   <li>Controles de reproducción: anterior/siguiente (navegan entre pestañas), play/pausa,
@@ -31,6 +31,8 @@ import java.util.function.Consumer;
  * <p>Los botones prev/next están cableados a los callbacks {@code onPrev}/{@code onNext}
  * que en {@code MainController} invocan {@code navigateTab(-1/+1)}, no cambian de canción.
  * La visualización de onda se dibuja externamente mediante {@code MainController.drawWaveCanvas()}.
+ * El contraste de texto del panel se aplica en {@code MainController} a través de
+ * {@link ThemeManager#applyContrastStroke} tras añadir el panel al área de contenido.
  */
 public final class PlayerPanelBuilder {
 

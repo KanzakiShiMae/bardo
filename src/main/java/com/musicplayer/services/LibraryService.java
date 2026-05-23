@@ -12,7 +12,7 @@ import java.util.Map;
 
 /**
  * Servicio singleton que gestiona la biblioteca del usuario: colecciones de canciones,
- * canciones pineadas y preferencias de reproducción.
+ * canciones pineadas, preferencias de reproducción y configuración de apariencia.
  *
  * <p><b>Persistencia:</b> los cambios en grupos y canciones pineadas disparan un
  * guardado diferido ({@link #debouncedSave()}) de 600 ms para evitar escrituras
@@ -26,6 +26,12 @@ import java.util.Map;
  * <p><b>Contador de uso:</b> {@link LibraryGroup#incrementPlayCount()} se llama desde
  * {@code MainController.downloadAndPlay()} cada vez que el usuario reproduce una canción
  * de un grupo concreto; determina qué colecciones aparecen en la pantalla de inicio.
+ *
+ * <p><b>Tema y apariencia:</b> persiste y carga las variables de tema CSS
+ * ({@link #saveTheme}/{@link #loadTheme}), modos dinámicos por variable
+ * ({@link #saveThemeVarModes}/{@link #loadThemeVarModes}), y los flags de colores
+ * dinámicos y contraste de texto automático. Estas preferencias son consumidas
+ * por {@link com.musicplayer.controllers.ThemeManager} al arrancar.
  */
 public class LibraryService {
 

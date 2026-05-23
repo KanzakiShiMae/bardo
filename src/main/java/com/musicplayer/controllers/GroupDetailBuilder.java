@@ -32,6 +32,11 @@ import javafx.collections.transformation.FilteredList;
  *   <li>Checklist de playlists para copiar/mover canciones entre colecciones.</li>
  *   <li>Modo Mashup: selección de dos canciones para reproducirlas simultáneamente.</li>
  * </ul>
+ *
+ * <p>Todos los fondos y colores de texto usan variables CSS de {@link ThemeManager#THEME_VARS}
+ * ({@code bardo-bg}, {@code bardo-text}, etc.) para ser configurables desde el panel de
+ * Configuración. El contraste de texto se aplica en {@code MainController} con
+ * {@link ThemeManager#applyContrastStroke} al abrir el panel de detalle.
  */
 public final class GroupDetailBuilder {
 

@@ -17,6 +17,10 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
 - **Barra de búsqueda** en cada playlist (insensible a mayúsculas y tildes)
 - **Interfaz sin cromo nativo** — ventana completamente personalizada, redimensionable y con soporte para maximizar/pantalla completa
 - **Persistencia automática** — la biblioteca y la configuración se guardan en disco sin intervención del usuario
+- **Miniaturas 16:9** — tanto en el mini-reproductor inferior (78×44 px) como en el panel expandido (320×180 px), las portadas se muestran con la proporción de las miniaturas de YouTube
+- **Colores dinámicos** — los colores de acento y del reproductor siguen automáticamente los colores dominantes extraídos de la miniatura de la canción en reproducción (extracción por cuantización de tono con 18 cubos de 20°)
+- **Tema completamente personalizable** — todos los colores de la interfaz se configuran desde *Configuración → Apariencia*; cada variable tiene un selector de modo (estático / color primario de canción / color secundario de canción) y un botón de reset individual al color por defecto
+- **Contraste de texto automático (WCAG)** — cuando el ratio de contraste texto/fondo cae por debajo del umbral 3.0, se aplica una sombra suave alrededor del texto para garantizar la legibilidad con cualquier combinación de colores
 
 ---
 
@@ -97,6 +101,8 @@ src/main/
 │   ├── App.java                          # Punto de entrada JavaFX
 │   ├── controllers/
 │   │   ├── MainController.java           # Coordinador principal
+│   │   ├── ThemeManager.java             # Estado y lógica de temas y colores dinámicos
+│   │   ├── SettingsPanelBuilder.java     # Panel de Configuración
 │   │   ├── PlayerInstance.java           # Estado de un reproductor activo
 │   │   ├── PlayerPanelBuilder.java       # Panel completo del reproductor
 │   │   ├── MashupPanelBuilder.java       # Panel del reproductor Mashup
