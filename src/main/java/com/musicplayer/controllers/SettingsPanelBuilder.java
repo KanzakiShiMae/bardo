@@ -97,9 +97,27 @@ public final class SettingsPanelBuilder {
         String currentKey = libraryService.loadYouTubeApiKey();
         if (currentKey.isBlank()) currentKey = ConfigLoader.get("youtube.api.key");
 
-        TextField apiField = new TextField(currentKey);
+        PasswordField apiField = new PasswordField();
+        apiField.setText(currentKey);
         apiField.setPromptText("AIza…"); apiField.getStyleClass().add("detail-search-field");
         apiField.setPrefWidth(320);
+
+        TextField apiVisible = new TextField();
+        apiVisible.setPromptText("AIza…"); apiVisible.getStyleClass().add("detail-search-field");
+        apiVisible.setPrefWidth(320);
+        apiVisible.setVisible(false); apiVisible.setManaged(false);
+        apiVisible.textProperty().bindBidirectional(apiField.textProperty());
+
+        boolean[] revealing = {false};
+        Button toggleVisBtn = new Button("👁");
+        toggleVisBtn.getStyleClass().add("np-like-btn");
+        toggleVisBtn.setOnAction(e -> {
+            revealing[0] = !revealing[0];
+            apiField.setVisible(!revealing[0]);   apiField.setManaged(!revealing[0]);
+            apiVisible.setVisible(revealing[0]);  apiVisible.setManaged(revealing[0]);
+            toggleVisBtn.setText(revealing[0] ? "🔒" : "👁");
+            if (revealing[0]) apiVisible.requestFocus(); else apiField.requestFocus();
+        });
 
         Label apiStatusLbl = new Label(""); apiStatusLbl.getStyleClass().add("greeting-sub");
         apiStatusLbl.setStyle("-fx-text-fill:#c0392b;");
@@ -123,7 +141,8 @@ public final class SettingsPanelBuilder {
             Platform.exit();
         });
 
-        HBox apiRow = new HBox(10, apiField, saveRestartBtn); apiRow.setAlignment(Pos.CENTER_LEFT);
+        HBox apiRow = new HBox(8, apiField, apiVisible, toggleVisBtn, saveRestartBtn);
+        apiRow.setAlignment(Pos.CENTER_LEFT);
         Separator settingsSep = new Separator(); settingsSep.setPadding(new Insets(8, 0, 8, 0));
         VBox apiSection = new VBox(8, apiSectionLbl, apiDescLbl, apiRow, apiStatusLbl);
 

@@ -23,7 +23,6 @@ import javafx.scene.input.MouseButton;
 import javafx.scene.layout.*;
 import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
-import javafx.scene.shape.Circle;
 import javafx.stage.DirectoryChooser;
 import javafx.util.Duration;
 
@@ -101,7 +100,7 @@ public class MainController implements Initializable {
     @FXML private HBox      nowPlayingBar;
     @FXML private ImageView albumArt;
     @FXML private Label     nowPlayingTitle, nowPlayingArtist;
-    @FXML private Button    btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat, btnVolume;
+    @FXML private Button    btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat;
     @FXML private Slider    progressSlider, volumeSlider;
     @FXML private Label     timeElapsed, timeTotal, volumeLabel;
     @FXML private StackPane vinylContainer;
@@ -380,7 +379,6 @@ public class MainController implements Initializable {
 
         volumeSlider.valueProperty().addListener((obs, old, val) -> {
             int pct = (int) Math.round(val.doubleValue());
-            btnVolume.setText(pct == 0 ? "🔇" : pct < 40 ? "🔈" : "🔊");
             if (volumeLabel != null) volumeLabel.setText(pct + "%");
             volumeSavePause.playFromStart();
             if (focusedPlayer == null) return;
@@ -1207,7 +1205,6 @@ public class MainController implements Initializable {
     @FXML private void onQuickSearchRadio()     { searchField.setText("lofi radio");      onSearchAction(); }
     @FXML private void onQuickSearchNew()       { searchField.setText("new music 2025");  onSearchAction(); }
     @FXML private void onOpenInBrowser()        { if (focusedPlayer != null && focusedPlayer.song != null && !focusedPlayer.song.isLocal()) UIUtils.openInBrowser(focusedPlayer.song.getVideoId()); }
-    @FXML private void onShowQueue()            { /* reservado */ }
 
     // ── Library ───────────────────────────────────────────────────────────────
 

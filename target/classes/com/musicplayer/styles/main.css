@@ -373,31 +373,37 @@
 
 /* ── Now playing bar ──────────────────────────── */
 .now-playing-bar {
-    -fx-background-color: linear-gradient(to right, bardo-player-bg1, bardo-bg, derive(bardo-accent2, 70%));
-    -fx-border-color: derive(bardo-sidebar-bg, -8%);
-    -fx-border-width: 1 0 0 0;
-    -fx-padding: 12 0 12 0;
-    -fx-pref-height: 90px;
-    -fx-min-height: 90px;
-    -fx-effect: dropshadow(gaussian, rgba(150,130,170,0.08), 12, 0, 0, -3);
+    -fx-background-color: linear-gradient(to right, bardo-player-bg1 20%, bardo-bg 70%);
+    -fx-border-color: derive(bardo-accent, 35%);
+    -fx-border-width: 1.5 0 0 0;
+    -fx-padding: 10 0 10 0;
+    -fx-pref-height: 86px;
+    -fx-min-height: 86px;
+    -fx-effect: dropshadow(gaussian, rgba(150,130,170,0.12), 16, 0, 0, -4);
 }
 
 .vinyl-container {
     -fx-alignment: CENTER;
-    -fx-background-color: derive(bardo-sidebar-bg, -4%);
+    -fx-background-color: derive(bardo-sidebar-bg, -6%);
     -fx-background-radius: 8px;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.14), 8, 0, 0, 2);
 }
 .album-art { -fx-opacity: 1.0; }
 
-.np-title  { -fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: bardo-text; }
-.np-artist { -fx-font-size: 12px; -fx-text-fill: bardo-text-muted; }
+.np-title  {
+    -fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: bardo-text;
+    -fx-wrap-text: false;
+}
+.np-artist { -fx-font-size: 11px; -fx-text-fill: bardo-text-muted; }
 .np-like-btn {
     -fx-background-color: transparent;
     -fx-border-width: 0;
-    -fx-font-size: 16px;
+    -fx-font-size: 15px;
     -fx-cursor: hand;
     -fx-padding: 4;
+    -fx-opacity: 0.65;
 }
+.np-like-btn:hover { -fx-opacity: 1.0; }
 
 /* Player buttons */
 .play-btn {

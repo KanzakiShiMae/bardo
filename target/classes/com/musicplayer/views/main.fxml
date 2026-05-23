@@ -138,14 +138,15 @@
         <HBox fx:id="nowPlayingBar" styleClass="now-playing-bar" alignment="CENTER" spacing="0">
 
             <!-- Song info -->
-            <HBox spacing="12" alignment="CENTER_LEFT" prefWidth="260" minWidth="220">
+            <HBox spacing="12" alignment="CENTER_LEFT" prefWidth="270" minWidth="220"
+                  style="-fx-padding: 0 0 0 12;">
                 <StackPane fx:id="vinylContainer" styleClass="vinyl-container">
                     <ImageView fx:id="albumArt" fitWidth="78" fitHeight="44" styleClass="album-art" />
                     <Canvas fx:id="miniWaveCanvas" width="78" height="44" />
                 </StackPane>
-                <VBox spacing="3" alignment="CENTER_LEFT">
+                <VBox spacing="2" alignment="CENTER_LEFT" HBox.hgrow="ALWAYS">
                     <Label fx:id="nowPlayingTitle"  text="Selecciona una canción"
-                           styleClass="np-title"  maxWidth="120" />
+                           styleClass="np-title"  maxWidth="150" />
                     <Label fx:id="nowPlayingArtist" text="–"
                            styleClass="np-artist" />
                 </VBox>
@@ -153,28 +154,26 @@
             </HBox>
 
             <!-- Controls + progress -->
-            <VBox spacing="6" alignment="CENTER" HBox.hgrow="ALWAYS">
+            <VBox spacing="5" alignment="CENTER" HBox.hgrow="ALWAYS">
                 <HBox spacing="20" alignment="CENTER">
-                    <Button fx:id="btnShuffle"   text="⇄"  styleClass="control-btn" />
-                    <Button fx:id="btnPrev"      text="⏮"  styleClass="control-btn" />
-                    <Button fx:id="btnPlayPause" text="▶"  styleClass="play-btn"    />
-                    <Button fx:id="btnNext"      text="⏭"  styleClass="control-btn" />
-                    <Button fx:id="btnRepeat"    text="↺"  styleClass="control-btn" />
+                    <Button fx:id="btnPrev"      text="⏮" styleClass="control-btn" />
+                    <Button fx:id="btnPlayPause" text="▶" styleClass="play-btn"    />
+                    <Button fx:id="btnNext"      text="⏭" styleClass="control-btn" />
                 </HBox>
-                <HBox spacing="10" alignment="CENTER">
+                <HBox spacing="8" alignment="CENTER">
                     <Label fx:id="timeElapsed" text="0:00" styleClass="time-label" />
                     <Slider fx:id="progressSlider" styleClass="progress-slider"
-                            prefWidth="380" min="0" max="100" value="0" />
+                            prefWidth="360" min="0" max="100" value="0" />
                     <Label fx:id="timeTotal" text="0:00" styleClass="time-label" />
                 </HBox>
             </VBox>
 
-            <!-- Volume -->
-            <HBox spacing="8" alignment="CENTER_RIGHT" prefWidth="230" minWidth="200"
+            <!-- Secondary controls + volume -->
+            <HBox spacing="6" alignment="CENTER_RIGHT" prefWidth="240" minWidth="200"
                   style="-fx-padding: 0 20 0 0;">
+                <Button fx:id="btnShuffle" text="⇄" styleClass="control-btn" />
+                <Button fx:id="btnRepeat"  text="↺" styleClass="control-btn" />
                 <Button text="⇆" styleClass="control-btn" onAction="#onSwitchFocusedPlayer" />
-                <Button text="📋" styleClass="control-btn" onAction="#onShowQueue" />
-                <Button fx:id="btnVolume" text="🔊" styleClass="control-btn" />
                 <Slider fx:id="volumeSlider" styleClass="volume-slider"
                         prefWidth="80" min="0" max="100" value="70" />
                 <Label fx:id="volumeLabel" text="70%" styleClass="volume-pct-label" />
