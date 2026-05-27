@@ -6,7 +6,7 @@
 
     <groupId>com.musicplayer</groupId>
     <artifactId>bardo</artifactId>
-    <version>1.0.0</version>
+    <version>0.2.2-alpha</version>
     <packaging>jar</packaging>
     <name>Bardo</name>
     <description>Reproductor de música de escritorio con JavaFX, multicanal, integración YouTube y biblioteca local.</description>
@@ -18,7 +18,39 @@
         <javafx.version>21.0.2</javafx.version>
     </properties>
 
+    <repositories>
+        <repository>
+            <id>local-lib-repo</id>
+            <url>file://${project.basedir}/lib/repo</url>
+        </repository>
+    </repositories>
+
     <dependencies>
+        <!-- TarsosDSP — JARs locales en lib/repo/
+             Nombres de artefacto TarsosDSP-core / TarsosDSP-jvm para que los
+             módulos automáticos se llamen TarsosDSP.core y TarsosDSP.jvm -->
+        <dependency>
+            <groupId>be.tarsos.dsp</groupId>
+            <artifactId>TarsosDSP-core</artifactId>
+            <version>2.5</version>
+        </dependency>
+        <dependency>
+            <groupId>be.tarsos.dsp</groupId>
+            <artifactId>TarsosDSP-jvm</artifactId>
+            <version>2.5</version>
+        </dependency>
+
+        <!-- jave2 — conversión M4A→WAV para TarsosDSP (bundlea ffmpeg nativo) -->
+        <dependency>
+            <groupId>ws.schild</groupId>
+            <artifactId>jave-core</artifactId>
+            <version>3.3.1</version>
+        </dependency>
+        <dependency>
+            <groupId>ws.schild</groupId>
+            <artifactId>jave-nativebin-win64</artifactId>
+            <version>3.3.1</version>
+        </dependency>
         <!-- JavaFX para Windows: clasificador win = bytecode + DLLs nativos en un solo JAR -->
         <dependency>
             <groupId>org.openjfx</groupId>
@@ -90,7 +122,17 @@
         <resources>
             <resource>
                 <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>com/musicplayer/app.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
                 <filtering>false</filtering>
+                <excludes>
+                    <exclude>com/musicplayer/app.properties</exclude>
+                </excludes>
             </resource>
         </resources>
         <plugins>

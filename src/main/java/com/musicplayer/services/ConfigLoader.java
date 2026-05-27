@@ -6,7 +6,8 @@ import java.util.Properties;
 
 public class ConfigLoader {
 
-    private static final Properties props = new Properties();
+    private static final Properties props    = new Properties();
+    private static final Properties appProps = new Properties();
 
     static {
         try (InputStream in = ConfigLoader.class.getResourceAsStream(
@@ -15,6 +16,10 @@ public class ConfigLoader {
         } catch (IOException e) {
             throw new ExceptionInInitializerError("Cannot load config.properties: " + e.getMessage());
         }
+        try (InputStream in = ConfigLoader.class.getResourceAsStream(
+                "/com/musicplayer/app.properties")) {
+            if (in != null) appProps.load(in);
+        } catch (IOException ignored) {}
     }
 
     public static String get(String key) {
@@ -26,5 +31,9 @@ public class ConfigLoader {
         if (val == null) return defaultValue;
         try { return Integer.parseInt(val.trim()); }
         catch (NumberFormatException e) { return defaultValue; }
+    }
+
+    public static String getVersion() {
+        return appProps.getProperty("version", "");
     }
 }
