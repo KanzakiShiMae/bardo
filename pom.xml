@@ -120,19 +120,17 @@
     <build>
         <finalName>bardo</finalName>
         <resources>
+            <!-- Filtering solo para app.properties; el resto permanece sin filtrar
+                 para evitar corromper binarios (PNG, ejecutables). -->
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>true</filtering>
-                <includes>
-                    <include>com/musicplayer/app.properties</include>
-                </includes>
+                <includes><include>**/app.properties</include></includes>
             </resource>
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>false</filtering>
-                <excludes>
-                    <exclude>com/musicplayer/app.properties</exclude>
-                </excludes>
+                <excludes><exclude>**/app.properties</exclude></excludes>
             </resource>
         </resources>
         <plugins>
@@ -185,9 +183,9 @@
                     <encoding>UTF-8</encoding>
                     <charset>UTF-8</charset>
                     <docencoding>UTF-8</docencoding>
-                    <windowtitle>Bardo 1.0.0 — API</windowtitle>
-                    <doctitle>Bardo 1.0.0</doctitle>
-                    <header><![CDATA[<b>Bardo</b> 1.0.0]]></header>
+                    <windowtitle>Bardo ${project.version} — API</windowtitle>
+                    <doctitle>Bardo ${project.version}</doctitle>
+                    <header><![CDATA[<b>Bardo</b> ${project.version}]]></header>
                     <bottom><![CDATA[Copyright &copy; 2026 Bardo. Licencia MIT.]]></bottom>
                     <doclint>none</doclint>
                     <failOnError>false</failOnError>
