@@ -155,4 +155,103 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Perfil para generar el instalador nativo con jpackage.
+            Uso:  mvn clean package -Pinstaller
+            Produce: target/installer/Bardo/  (app-image con JRE embebido, ~220 MB)
+            Para MSI real: instala WiX Toolset y usa -Dinstaller.type=msi
+        -->
+        <profile>
+            <id>installer</id>
+            <properties>
+                <!-- jpackage requiere versión numérica sin sufijos alfanuméricos -->
+                <installer.version>0.2.0</installer.version>
+                <installer.type>app-image</installer.type>
+            </properties>
+            <build>
+                <plugins>
+
+                    <!-- 1. Copia solo bardo.jar a directorio limpio para jpackage -->
+                    <plugin>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>prepare-jpackage-input</id>
+                                <phase>package</phase>
+                                <goals><goal>run</goal></goals>
+                                <configuration>
+                                    <target>
+                                        <mkdir dir="${project.build.directory}/jpackage-input"/>
+                                        <copy file="${project.build.directory}/bardo.jar"
+                                              todir="${project.build.directory}/jpackage-input"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- 2. Convierte icon_full.png → icon_full.ico; luego ejecuta jpackage -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+
+                            <execution>
+                                <id>make-ico</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>powershell</executable>
+                                    <arguments>
+                                        <argument>-ExecutionPolicy</argument>
+                                        <argument>Bypass</argument>
+                                        <argument>-File</argument>
+                                        <argument>${project.basedir}/scripts/make-ico.ps1</argument>
+                                        <argument>-src</argument>
+                                        <argument>${project.basedir}/src/main/resources/com/musicplayer/icons/icon_full.png</argument>
+                                        <argument>-dst</argument>
+                                        <argument>${project.build.directory}/icon_full.ico</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+
+                            <execution>
+                                <id>jpackage</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>${java.home}/bin/jpackage</executable>
+                                    <arguments>
+                                        <argument>--type</argument>
+                                        <argument>${installer.type}</argument>
+                                        <argument>--input</argument>
+                                        <argument>${project.build.directory}/jpackage-input</argument>
+                                        <argument>--main-jar</argument>
+                                        <argument>bardo.jar</argument>
+                                        <argument>--name</argument>
+                                        <argument>Bardo</argument>
+                                        <argument>--app-version</argument>
+                                        <argument>${installer.version}</argument>
+                                        <argument>--icon</argument>
+                                        <argument>${project.build.directory}/icon_full.ico</argument>
+                                        <argument>--dest</argument>
+                                        <argument>${project.build.directory}/installer</argument>
+                                        <argument>--vendor</argument>
+                                        <argument>KanzakiShiMae</argument>
+                                        <argument>--description</argument>
+                                        <argument>Reproductor de música con integración YouTube</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+
+                        </executions>
+                    </plugin>
+
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

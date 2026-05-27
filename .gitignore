@@ -24,3 +24,9 @@ desktop.ini
 # ── Local user data (generated at runtime, not source) ───────
 # La biblioteca y configuración se guardan en %APPDATA%\Bardo\
 # y nunca forman parte del repositorio.
+
+# ── Claude Code ───────────────────────────────────────────────
+.claude/
+
+# ── Scripts de build locales ──────────────────────────────────
+scripts/
