@@ -91,6 +91,12 @@ public class ThemeManager {
     /** Si {@code false}, no se aplica ningún shadow de contraste al texto. */
     boolean textContrastEnabled  = true;
 
+    /** Callback invocado al final de cada cambio de tema completo. */
+    Runnable onColorsChanged;
+
+    /** Callback invocado al inicio de cada fade (antes del primer frame). */
+    Runnable onFadeStart;
+
     private static final long FADE_DURATION_NS = 700_000_000L;
 
     /**
@@ -208,6 +214,7 @@ public class ThemeManager {
             else
                 applyContrastStroke(child, "bardo-text", "bardo-bg");
         }
+        if (onColorsChanged != null) onColorsChanged.run();
     }
 
     /**
@@ -321,10 +328,26 @@ public class ThemeManager {
         }
     }
 
+    /**
+     * Devuelve el color TARGET del fade activo para {@code varName},
+     * o el color actual si no hay fade en curso.
+     */
+    String peekTargetColor(String varName) {
+        double[] s = activeFades.get(varName);
+        if (s != null) return String.format("#%02x%02x%02x",
+            (int) Math.round(s[3]), (int) Math.round(s[4]), (int) Math.round(s[5]));
+        return currentTheme.getOrDefault(varName, "");
+    }
+
     private void ensureFadeTimerRunning() {
         if (colorFadeTimer != null) return;
         colorFadeTimer = new AnimationTimer() {
+            private boolean startFired = false;
             @Override public void handle(long now) {
+                if (!startFired) {
+                    startFired = true;
+                    if (onFadeStart != null) onFadeStart.run();
+                }
                 boolean anyActive = false;
                 var it = activeFades.entrySet().iterator();
                 while (it.hasNext()) {

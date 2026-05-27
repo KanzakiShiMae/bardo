@@ -18,16 +18,6 @@
         <HBox fx:id="titleBar" styleClass="title-bar" alignment="CENTER_LEFT">
 
             <HBox spacing="8" alignment="CENTER_LEFT" style="-fx-padding: 0 0 0 16;">
-                <Button fx:id="btnClose"    styleClass="win-btn, win-close"    text="" />
-                <Button fx:id="btnMinimize" styleClass="win-btn, win-minimize" text="" />
-                <Button fx:id="btnMaximize" styleClass="win-btn, win-maximize" text="" />
-            </HBox>
-
-            <HBox alignment="CENTER" HBox.hgrow="ALWAYS">
-                <Label text="✦ bardo" styleClass="app-title" />
-            </HBox>
-
-            <HBox spacing="8" alignment="CENTER_RIGHT" style="-fx-padding: 0 16 0 0;">
                 <TextField fx:id="searchField"
                            promptText="Buscar en YouTube…"
                            styleClass="top-search-field"
@@ -35,6 +25,16 @@
                            onAction="#onSearchAction" />
                 <Button fx:id="btnSearchGo" text="⌕" styleClass="search-go-btn"
                         onAction="#onSearchAction" />
+            </HBox>
+
+            <HBox alignment="CENTER" HBox.hgrow="ALWAYS">
+                <Label text="✦ bardo" styleClass="app-title" />
+            </HBox>
+
+            <HBox spacing="0" alignment="CENTER_RIGHT">
+                <Button fx:id="btnMinimize" styleClass="win-btn, win-minimize" text="−" maxHeight="Infinity" />
+                <Button fx:id="btnMaximize" styleClass="win-btn, win-maximize" text="⛶" maxHeight="Infinity" />
+                <Button fx:id="btnClose"    styleClass="win-btn, win-close"    text="✕" maxHeight="Infinity" />
             </HBox>
 
         </HBox>
@@ -47,12 +47,13 @@
             <!-- ──── SIDEBAR ──── -->
             <VBox fx:id="sidebar" styleClass="sidebar" spacing="4" prefWidth="220">
 
-                <VBox alignment="CENTER" spacing="6" styleClass="sidebar-header">
-                    <StackPane styleClass="avatar-ring">
-                        <Circle radius="30" styleClass="avatar-circle" />
-                        <Label text="♪" styleClass="avatar-note" />
+                <VBox alignment="CENTER" styleClass="sidebar-header">
+                    <StackPane fx:id="sidebarLogoStack" style="-fx-cursor: hand;" prefWidth="180" prefHeight="180" minWidth="180" minHeight="180">
+                        <ImageView fx:id="sidebarLogo"       fitWidth="180" fitHeight="180" preserveRatio="true" smooth="true" />
+                        <ImageView fx:id="sidebarLogoNext"   fitWidth="180" fitHeight="180" preserveRatio="true" smooth="true" opacity="0" mouseTransparent="true" />
+                        <ImageView fx:id="sidebarLogoFilter" fitWidth="180" fitHeight="180" preserveRatio="true" smooth="true" mouseTransparent="true" />
+                        <ImageView fx:id="sidebarLogoBorder" fitWidth="180" fitHeight="180" preserveRatio="true" smooth="true" mouseTransparent="true" />
                     </StackPane>
-                    <Label text="Mi música" styleClass="sidebar-username" />
                 </VBox>
 
                 <Separator styleClass="sidebar-divider" />

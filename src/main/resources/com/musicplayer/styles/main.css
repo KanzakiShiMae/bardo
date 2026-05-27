@@ -41,17 +41,38 @@
 
 /* Window control buttons */
 .win-btn {
-    -fx-min-width: 13px; -fx-min-height: 13px;
-    -fx-max-width: 13px; -fx-max-height: 13px;
-    -fx-background-radius: 50%;
-    -fx-border-width: 0;
+    -fx-min-width: 46px;
+    -fx-pref-width: 46px;
+    -fx-max-width: 46px;
+    -fx-background-radius: 0;
     -fx-cursor: hand;
     -fx-padding: 0;
+    -fx-font-size: 17px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1a1a1a;
 }
-.win-close    { -fx-background-color: #ff8095; }
-.win-minimize { -fx-background-color: #ffde6a; }
-.win-maximize { -fx-background-color: #74e8a0; }
-.win-btn:hover { -fx-opacity: 0.8; }
+.win-minimize {
+    -fx-background-color: derive(bardo-accent2, 80%);
+    -fx-border-color: derive(bardo-sidebar-bg, -8%) transparent derive(bardo-accent2, 30%) transparent;
+    -fx-border-width: 0 0 2 1;
+}
+.win-maximize {
+    -fx-background-color: derive(bardo-accent2, 75%);
+    -fx-border-color: transparent transparent derive(bardo-accent2, 25%) transparent;
+    -fx-border-width: 0 0 2 0;
+}
+.win-close {
+    -fx-background-color: derive(bardo-accent, 78%);
+    -fx-border-color: transparent transparent derive(bardo-accent, 30%) transparent;
+    -fx-border-width: 0 0 2 0;
+}
+.win-minimize:hover { -fx-background-color: derive(bardo-accent2, 55%); }
+.win-maximize:hover { -fx-background-color: derive(bardo-accent2, 50%); }
+.win-close:hover {
+    -fx-background-color: #c42b1c;
+    -fx-text-fill: white;
+    -fx-border-color: transparent;
+}
 
 /* Top search */
 .top-search-field {
@@ -107,7 +128,7 @@
 }
 
 .sidebar-header {
-    -fx-padding: 8 0 12 0;
+    -fx-padding: 0;
     -fx-alignment: CENTER;
 }
 

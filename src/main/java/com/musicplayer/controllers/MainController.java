@@ -18,6 +18,10 @@ import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.image.PixelReader;
+import javafx.scene.image.PixelWriter;
+import javafx.scene.image.WritableImage;
+import javafx.scene.paint.Color;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.*;
@@ -79,6 +83,11 @@ public class MainController implements Initializable {
     @FXML private HBox   titleBar;
     @FXML private Button btnClose, btnMinimize, btnMaximize;
 
+    @FXML private ImageView        sidebarLogo;
+    @FXML private ImageView        sidebarLogoNext;
+    @FXML private ImageView        sidebarLogoFilter;
+    @FXML private ImageView        sidebarLogoBorder;
+    @FXML private javafx.scene.layout.StackPane sidebarLogoStack;
     @FXML private VBox             sidebar;
     @FXML private Button           btnHome, btnLibrary, btnSettings, btnNewGroup;
     @FXML private ListView<String> groupListView;
@@ -107,6 +116,11 @@ public class MainController implements Initializable {
     @FXML private javafx.scene.canvas.Canvas miniWaveCanvas;
 
     private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
+    private Image  logoPngSource;
+    private byte[] logoZoneMap;
+    private final java.util.concurrent.atomic.AtomicBoolean logoRecolorBusy =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
+    private javafx.animation.Animation logoFadeAnim;
 
     // ── State ─────────────────────────────────────────────────────────────────
     private boolean isShuffle, searchPlaylistMode, seekingByUser, titleBarDragging, fakeFullScreen;
@@ -153,6 +167,33 @@ public class MainController implements Initializable {
         if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
         youTubeService  = new YouTubeService(apiKey);
         downloadService = new DownloadService();
+
+        URL iconUrl   = getClass().getResource("/com/musicplayer/icons/icon.png");
+        URL filterUrl = getClass().getResource("/com/musicplayer/icons/icon_filter.png");
+        URL borderUrl = getClass().getResource("/com/musicplayer/icons/icon_border.png");
+        {
+            final URL iconRef = iconUrl, filterRef = filterUrl, borderRef = borderUrl;
+            Thread prep = new Thread(() -> {
+                try {
+                    Image png    = iconRef   != null ? new Image(iconRef.openStream())   : null;
+                    Image filter = filterRef != null ? new Image(filterRef.openStream()) : null;
+                    Image border = borderRef != null ? new Image(borderRef.openStream()) : null;
+                    byte[] zoneMap = png != null ? buildZoneMapFromPng(png) : null;
+                    Platform.runLater(() -> {
+                        if (filter != null) sidebarLogoFilter.setImage(filter);
+                        if (border != null) sidebarLogoBorder.setImage(border);
+                        if (png != null) {
+                            logoPngSource = png;
+                            logoZoneMap   = zoneMap;
+                            recolorLogo();
+                        }
+                    });
+                } catch (Exception ex) { ex.printStackTrace(); }
+            }, "bardo-logo-prep");
+            prep.setDaemon(true);
+            prep.start();
+        }
+        themeManager.onFadeStart = this::recolorLogo;
 
         setupTitleBar();
         setupWindowDrag();
@@ -264,7 +305,7 @@ public class MainController implements Initializable {
     /** Sincroniza el icono del botón maximizar con el estado actual de la ventana. */
     private void syncMaximizeIcon(javafx.stage.Stage st) {
         Platform.runLater(() -> btnMaximize.setText(
-            (st.isMaximized() || fakeFullScreen) ? "❐" : ""
+            (st.isMaximized() || fakeFullScreen) ? "❐" : "⛶"
         ));
     }
 
@@ -337,7 +378,7 @@ public class MainController implements Initializable {
             if (st.isMaximized()) st.setMaximized(false);
             javafx.stage.Screen scr = targetScreen != null ? targetScreen
                 : screenAt(st.getX() + st.getWidth() / 2, st.getY() + st.getHeight() / 2);
-            javafx.geometry.Rectangle2D b = scr.getBounds();
+            javafx.geometry.Rectangle2D b = scr.getVisualBounds();
             st.setX(b.getMinX()); st.setY(b.getMinY());
             st.setWidth(b.getWidth()); st.setHeight(b.getHeight());
         } else {
@@ -1505,10 +1546,10 @@ public class MainController implements Initializable {
         Collections.shuffle(thumbUrls);
 
         ImageView imgView = new ImageView();
-        imgView.setFitWidth(220); imgView.setFitHeight(220);
-        imgView.setPreserveRatio(false);
-        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(220, 220);
-        clip.setArcWidth(18); clip.setArcHeight(18);
+        imgView.setFitWidth(160); imgView.setFitHeight(90);
+        imgView.setPreserveRatio(true);
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(160, 90);
+        clip.setArcWidth(12); clip.setArcHeight(12);
         imgView.setClip(clip);
         imgView.setStyle("-fx-cursor: hand;");
         imgView.setOnMouseClicked(e -> showGroupDetail(group));
@@ -1523,7 +1564,7 @@ public class MainController implements Initializable {
         removeBtn.setOnAction(e -> { group.setPlayCount(0); libraryService.save(); refreshHomePanel(); });
 
         StackPane imgContainer = new StackPane(imgView, removeBtn);
-        imgContainer.setPrefSize(220, 220); imgContainer.setMaxSize(220, 220);
+        imgContainer.setPrefSize(160, 90); imgContainer.setMaxSize(160, 90);
         imgContainer.getStyleClass().add("home-playlist-thumb");
         imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), removeBtn); ft.setToValue(1); ft.play(); });
         imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), removeBtn); ft.setToValue(0); ft.play(); });
@@ -1548,7 +1589,7 @@ public class MainController implements Initializable {
 
         Label nameLbl = new Label(group.getName());
         nameLbl.getStyleClass().add("home-playlist-name");
-        nameLbl.setMaxWidth(220);
+        nameLbl.setMaxWidth(160);
 
         Label countLbl = new Label(group.getPlayCount() + " reproducciones");
         countLbl.getStyleClass().add("home-playlist-count");
@@ -1562,10 +1603,10 @@ public class MainController implements Initializable {
         card.getStyleClass().add("home-playlist-card");
 
         ImageView imgView = new ImageView();
-        imgView.setFitWidth(220); imgView.setFitHeight(220);
-        imgView.setPreserveRatio(false);
-        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(220, 220);
-        clip.setArcWidth(18); clip.setArcHeight(18);
+        imgView.setFitWidth(160); imgView.setFitHeight(90);
+        imgView.setPreserveRatio(true);
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle(160, 90);
+        clip.setArcWidth(12); clip.setArcHeight(12);
         imgView.setClip(clip);
         imgView.setStyle("-fx-cursor: hand;");
         if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
@@ -1580,14 +1621,14 @@ public class MainController implements Initializable {
         unpinBtn.setOnAction(e -> { libraryService.unpinSong(song.getVideoId()); refreshHomePanel(); });
 
         StackPane imgContainer = new StackPane(imgView, unpinBtn);
-        imgContainer.setPrefSize(220, 220); imgContainer.setMaxSize(220, 220);
+        imgContainer.setPrefSize(160, 90); imgContainer.setMaxSize(160, 90);
         imgContainer.getStyleClass().add("home-playlist-thumb");
         imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(1); ft.play(); });
         imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(0); ft.play(); });
 
         Label titleLbl = new Label(song.getTitle());
         titleLbl.getStyleClass().add("home-playlist-name");
-        titleLbl.setMaxWidth(220);
+        titleLbl.setMaxWidth(160);
 
         Label artistLbl = new Label(song.getArtist());
         artistLbl.getStyleClass().add("home-playlist-count");
@@ -1690,5 +1731,154 @@ public class MainController implements Initializable {
             toastAnim.setOnFinished(e -> { toastPopup.hide(); toastPopup = null; toastAnim = null; });
             toastAnim.play();
         });
+    }
+
+    // ── Logo recolor ──────────────────────────────────────────────────────────
+
+    private void recolorLogo() {
+        if (logoPngSource == null || logoZoneMap == null) return;
+        if (!logoRecolorBusy.compareAndSet(false, true)) return;
+        Color accent  = ThemeManager.tryParseColor(themeManager.peekTargetColor("bardo-accent"));
+        Color accent2 = ThemeManager.tryParseColor(themeManager.peekTargetColor("bardo-accent2"));
+        Thread t = new Thread(() -> {
+            Image result = applyHueShift(logoPngSource, logoZoneMap, accent, accent2);
+            Platform.runLater(() -> { logoRecolorBusy.set(false); crossFadeLogo(result); });
+        }, "bardo-logo-recolor");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void crossFadeLogo(Image newImage) {
+        if (logoFadeAnim != null) { logoFadeAnim.stop(); sidebarLogoNext.setOpacity(0); }
+        sidebarLogoNext.setImage(newImage);
+        javafx.animation.FadeTransition fadeIn = new javafx.animation.FadeTransition(javafx.util.Duration.millis(700), sidebarLogoNext);
+        fadeIn.setFromValue(0.0);
+        fadeIn.setToValue(1.0);
+        fadeIn.setOnFinished(e -> {
+            sidebarLogo.setImage(newImage);
+            sidebarLogoNext.setOpacity(0);
+        });
+        logoFadeAnim = fadeIn;
+        logoFadeAnim.play();
+    }
+
+    /**
+     * Builds a per-pixel zone map from a PNG guide image.
+     * Zones: -1 = exterior background (transparent), 0 = white inner oval (transparent),
+     *         1 = zone1 (pink/warm hue), 2 = zone2 (blue/cool hue).
+     * Exterior detection uses BFS flood-fill from all border pixels.
+     */
+    private static byte[] buildZoneMapFromPng(Image guide) {
+        int w = (int) guide.getWidth(), h = (int) guide.getHeight();
+        PixelReader pr = guide.getPixelReader();
+
+        // Classify each pixel as white/low-saturation vs colored
+        boolean[] isWhite = new boolean[w * h];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                Color c = pr.getColor(x, y);
+                isWhite[y * w + x] = (c.getOpacity() < 0.1 || c.getSaturation() < 0.18);
+            }
+
+        // BFS flood-fill exterior from all border pixels that are white
+        byte[] zone = new byte[w * h];
+        java.util.ArrayDeque<Integer> queue = new java.util.ArrayDeque<>();
+        for (int x = 0; x < w; x++) {
+            if (isWhite[x]           && zone[x]           == 0) { zone[x]           = -1; queue.add(x); }
+            if (isWhite[(h-1)*w + x] && zone[(h-1)*w + x] == 0) { zone[(h-1)*w + x] = -1; queue.add((h-1)*w + x); }
+        }
+        for (int y = 1; y < h - 1; y++) {
+            if (isWhite[y*w]       && zone[y*w]       == 0) { zone[y*w]       = -1; queue.add(y*w); }
+            if (isWhite[y*w + w-1] && zone[y*w + w-1] == 0) { zone[y*w + w-1] = -1; queue.add(y*w + w-1); }
+        }
+        while (!queue.isEmpty()) {
+            int idx = queue.poll();
+            int x = idx % w, y = idx / w;
+            int[][] nb = {{x-1,y},{x+1,y},{x,y-1},{x,y+1}};
+            for (int[] n : nb) {
+                if (n[0] < 0 || n[0] >= w || n[1] < 0 || n[1] >= h) continue;
+                int ni = n[1] * w + n[0];
+                if (zone[ni] != 0 || !isWhite[ni]) continue;
+                zone[ni] = -1;
+                queue.add(ni);
+            }
+        }
+
+        // Assign zones by hue to all remaining colored pixels
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int idx = y * w + x;
+                if (zone[idx] != 0 || isWhite[idx]) continue; // exterior or white oval
+                double hue = pr.getColor(x, y).getHue();
+                if      (hue >= 300 || hue <= 60)  zone[idx] = 1; // pink → zone1
+                else if (hue >= 175 && hue <= 265) zone[idx] = 2; // blue → zone2
+                // else stays 0 → transparent
+            }
+        }
+        return zone;
+    }
+
+    private static Image applyHueShift(Image src, byte[] zoneMap, Color accent, Color accent2) {
+        int w = (int) src.getWidth(), h = (int) src.getHeight();
+        int[] pixels = new int[w * h];
+        src.getPixelReader().getPixels(0, 0, w, h,
+            javafx.scene.image.PixelFormat.getIntArgbInstance(), pixels, 0, w);
+        float hue1 = (float) accent.getHue(),  sat1 = (float) accent.getSaturation(), bri1 = (float) accent.getBrightness();
+        float hue2 = (float) accent2.getHue(), sat2 = (float) accent2.getSaturation(), bri2 = (float) accent2.getBrightness();
+        float[] hsb = new float[3];
+        for (int i = 0; i < pixels.length; i++) {
+            byte z = zoneMap[i];
+            if (z <= 0) { pixels[i] = 0; continue; }
+            int argb = pixels[i];
+            rgbToHsb((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, hsb);
+            float tH = (z == 1) ? hue1 : hue2;
+            float tS = (z == 1) ? sat1 : sat2;
+            float tB = (z == 1) ? bri1 : bri2;
+            pixels[i] = hsbToArgb(tH, tS, Math.min(hsb[2], tB), argb >>> 24);
+        }
+        WritableImage out = new WritableImage(w, h);
+        out.getPixelWriter().setPixels(0, 0, w, h,
+            javafx.scene.image.PixelFormat.getIntArgbInstance(), pixels, 0, w);
+        return out;
+    }
+
+    private static void rgbToHsb(int r, int g, int b, float[] out) {
+        float fr = r / 255f, fg = g / 255f, fb = b / 255f;
+        float max = Math.max(fr, Math.max(fg, fb));
+        float min = Math.min(fr, Math.min(fg, fb));
+        float delta = max - min;
+        out[2] = max;
+        out[1] = max == 0f ? 0f : delta / max;
+        if (delta == 0f) { out[0] = 0f; return; }
+        float hue;
+        if      (max == fr) hue = (fg - fb) / delta;
+        else if (max == fg) hue = 2f + (fb - fr) / delta;
+        else                hue = 4f + (fr - fg) / delta;
+        hue *= 60f;
+        if (hue < 0f) hue += 360f;
+        out[0] = hue;
+    }
+
+    private static int hsbToArgb(float hue, float sat, float bri, int alpha) {
+        if (sat == 0f) {
+            int v = (int)(bri * 255f);
+            return (alpha << 24) | (v << 16) | (v << 8) | v;
+        }
+        float h = hue / 60f;
+        int   sector = (int) h % 6;
+        float f = h - (int) h;
+        float p = bri * (1f - sat);
+        float q = bri * (1f - sat * f);
+        float t = bri * (1f - sat * (1f - f));
+        float r, g, b;
+        switch (sector) {
+            case 0:  r = bri; g = t;   b = p;   break;
+            case 1:  r = q;   g = bri; b = p;   break;
+            case 2:  r = p;   g = bri; b = t;   break;
+            case 3:  r = p;   g = q;   b = bri; break;
+            case 4:  r = t;   g = p;   b = bri; break;
+            default: r = bri; g = p;   b = q;   break;
+        }
+        return (alpha << 24) | ((int)(r * 255f) << 16) | ((int)(g * 255f) << 8) | (int)(b * 255f);
     }
 }
