@@ -1,4 +1,4 @@
-# ✦ Bardo
+# Bardo v0.2.0-alpha
 
 Reproductor de música de escritorio construido con JavaFX 21. Combina biblioteca local, reproducción multicanal simultánea, integración con YouTube y un modo Mashup para mezclar dos canciones en tiempo real.
 
@@ -16,6 +16,8 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
   - *Mashup* — selecciona dos canciones y reprodúcelas simultáneamente con sliders independientes y crossfade animado
 - **Barra de búsqueda** en cada playlist (insensible a mayúsculas y tildes)
 - **Interfaz sin cromo nativo** — ventana completamente personalizada, redimensionable y con soporte para maximizar/pantalla completa
+- **Icono de aplicación** — aparece en la barra de tareas de Windows, Alt+Tab y previsualización de ventana
+- **Versión visible** — el título de la barra muestra `Bardo vX.Y.Z`; la versión se lee de `app.properties`, generado por Maven en tiempo de build
 - **Persistencia automática** — la biblioteca y la configuración se guardan en disco sin intervención del usuario
 - **Miniaturas 16:9** — tanto en el mini-reproductor inferior (78×44 px) como en el panel expandido (320×180 px), las portadas se muestran con la proporción de las miniaturas de YouTube
 - **Colores dinámicos** — los colores de acento y del reproductor siguen automáticamente los colores dominantes extraídos de la miniatura de la canción en reproducción (extracción por cuantización de tono con 18 cubos de 20°)
@@ -98,7 +100,8 @@ Al arrancar por primera vez (sin clave configurada) aparecerá un diálogo que t
 ```
 src/main/
 ├── java/com/musicplayer/
-│   ├── App.java                          # Punto de entrada JavaFX
+│   ├── App.java                          # Punto de entrada JavaFX (stage, icono, título)
+│   ├── Launcher.java                     # Wrapper para el fat JAR (evita restricción de JavaFX)
 │   ├── controllers/
 │   │   ├── MainController.java           # Coordinador principal
 │   │   ├── ThemeManager.java             # Estado y lógica de temas y colores dinámicos
@@ -117,7 +120,7 @@ src/main/
 │   │   ├── LibraryGroup.java             # Colección de canciones (playlist)
 │   │   └── YouTubePlaylistInfo.java      # Metadatos de playlist de YouTube
 │   └── services/
-│       ├── ConfigLoader.java             # Lee config.properties
+│       ├── ConfigLoader.java             # Carga config.properties y app.properties
 │       ├── YouTubeService.java           # Búsqueda y playlists via YouTube API
 │       ├── DownloadService.java          # Descarga de audio (yt-dlp)
 │       ├── LibraryService.java           # Singleton de biblioteca en memoria
@@ -126,8 +129,20 @@ src/main/
     ├── views/main.fxml                   # Layout principal
     ├── styles/main.css                   # Hoja de estilos
     ├── config.properties                 # Configuración (sin secretos)
+    ├── app.properties                    # Versión inyectada por Maven en build
+    ├── icons/
+    │   ├── icon.png                      # Icono del sidebar (capa base, coloreable)
+    │   ├── icon_filter.png               # Capa intermedia del icono del sidebar
+    │   ├── icon_border.png               # Capa superior del icono del sidebar (bordes)
+    │   └── icon_full.png                 # Icono de aplicación (taskbar, Alt+Tab)
     └── bin/yt-dlp.exe                    # Binario de descarga (solo Windows)
 ```
+
+---
+
+## Gestión de versiones
+
+La versión se define **únicamente** en `<version>` de `pom.xml`. Maven la inyecta en `app.properties` al compilar, y `ConfigLoader.getVersion()` la expone al resto de la app. Para actualizar la versión basta con cambiar `pom.xml` y recompilar.
 
 ---
 

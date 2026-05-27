@@ -28,7 +28,7 @@
             </HBox>
 
             <HBox alignment="CENTER" HBox.hgrow="ALWAYS">
-                <Label text="✦ bardo" styleClass="app-title" />
+                <Label fx:id="appTitleLabel" text="Bardo" styleClass="app-title" />
             </HBox>
 
             <HBox spacing="0" alignment="CENTER_RIGHT">

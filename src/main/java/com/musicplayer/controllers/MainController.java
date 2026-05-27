@@ -76,11 +76,16 @@ import java.util.stream.Collectors;
  * <p><b>Colores dinámicos:</b> {@link ThemeManager#updateDynamicColors()} extrae los colores
  * dominantes de la miniatura del reproductor enfocado y los aplica mediante fade (~700 ms)
  * a las variables configuradas en modo {@code DYN_PRIMARY} o {@code DYN_SECONDARY}.
+ *
+ * <p><b>Barra de título:</b> el label {@code appTitleLabel} muestra {@code "Bardo v{version}"},
+ * donde la versión se lee de {@code app.properties} via {@link com.musicplayer.services.ConfigLoader#getVersion()},
+ * generado por Maven en tiempo de build a partir de {@code <version>} en {@code pom.xml}.
  */
 public class MainController implements Initializable {
 
     // ── FXML fields ───────────────────────────────────────────────────────────
     @FXML private HBox   titleBar;
+    @FXML private Label  appTitleLabel;
     @FXML private Button btnClose, btnMinimize, btnMaximize;
 
     @FXML private ImageView        sidebarLogo;
@@ -159,6 +164,9 @@ public class MainController implements Initializable {
 
     @Override
     public void initialize(URL url, ResourceBundle rb) {
+        String v = ConfigLoader.getVersion();
+        appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
+
         libraryService = LibraryService.getInstance();
         themeManager = new ThemeManager(libraryService, () -> focusedPlayer, activePlayers,
             sidebar, tabBarScroll, nowPlayingBar, contentArea);

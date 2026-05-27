@@ -1,5 +1,6 @@
 package com.musicplayer;
 
+import com.musicplayer.services.ConfigLoader;
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
@@ -21,7 +22,10 @@ public class App extends Application {
         );
 
         stage.initStyle(StageStyle.UNDECORATED);
-        stage.setTitle("Bardo");
+        String v = ConfigLoader.getVersion();
+        stage.setTitle(v.isBlank() ? "Bardo" : "Bardo v" + v);
+        java.net.URL appIcon = getClass().getResource("/com/musicplayer/icons/icon_full.png");
+        if (appIcon != null) stage.getIcons().add(new Image(appIcon.toExternalForm()));
         stage.setFullScreenExitHint("");           // oculta el aviso nativo "Press ESC"
         stage.setScene(scene);
         stage.setMinWidth(900);
