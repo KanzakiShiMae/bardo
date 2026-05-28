@@ -20,7 +20,6 @@ import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelReader;
-import javafx.scene.image.PixelWriter;
 import javafx.scene.image.WritableImage;
 import javafx.scene.paint.Color;
 import javafx.scene.paint.CycleMethod;
@@ -108,8 +107,6 @@ public class MainController implements Initializable {
     @FXML private StackPane contentArea;
     @FXML private VBox      homePanel, searchPanel, libraryPanel, settingsPanel;
 
-    @FXML private Label             appTitleLabel;
-
     @FXML private TextField         searchField;
     @FXML private Button            btnSearchGo, btnSearchVideos, btnSearchPlaylists;
     @FXML private FlowPane          searchResultsPane;
@@ -182,8 +179,6 @@ public class MainController implements Initializable {
         themeManager = new ThemeManager(libraryService, () -> focusedPlayer, activePlayers,
             sidebar, tabBarScroll, nowPlayingBar, contentArea);
         themeManager.loadFromPersistence();
-        String v = ConfigLoader.getVersion();
-        if (appTitleLabel != null) appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
         String apiKey   = libraryService.loadYouTubeApiKey();
         if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
         youTubeService  = new YouTubeService(apiKey);
@@ -226,6 +221,7 @@ public class MainController implements Initializable {
             pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); });
         ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
         applyCircularClip();
+        setupLogoDrag();
 
         btnPlayPause.setOnAction(e -> { if (focusedPlayer != null) togglePlayInstance(focusedPlayer); });
         btnShuffle.setOnAction(e   -> toggleInlineSpectrogram(focusedPlayer));
@@ -1868,6 +1864,81 @@ public class MainController implements Initializable {
         });
         logoFadeAnim = fadeIn;
         logoFadeAnim.play();
+    }
+
+    private void setupLogoDrag() {
+        final double[] pressScene  = {0, 0};
+        final double[] prevScene   = {0, 0};
+        final long[]   prevTime    = {0};
+        final double[] angVelocity = {0};   // deg/ms
+        final AnimationTimer[] inertia   = {null};
+        final Timeline[]       resetAnim = {null};
+        sidebarLogoStack.setOnMousePressed(e -> {
+            if (inertia[0]   != null) { inertia[0].stop();   inertia[0]   = null; }
+            if (resetAnim[0] != null) { resetAnim[0].stop(); resetAnim[0] = null; }
+            pressScene[0]  = e.getSceneX();
+            pressScene[1]  = e.getSceneY();
+            prevScene[0]   = e.getSceneX();
+            prevScene[1]   = e.getSceneY();
+            prevTime[0]    = System.nanoTime();
+            angVelocity[0] = 0;
+            sidebarLogoStack.setCursor(javafx.scene.Cursor.CLOSED_HAND);
+            e.consume();
+        });
+
+        sidebarLogoStack.setOnMouseDragged(e -> {
+            long now = System.nanoTime();
+            double dt = (now - prevTime[0]) / 1_000_000.0;
+            double dx = e.getSceneX() - prevScene[0];
+            double dy = e.getSceneY() - prevScene[1];
+            prevScene[0] = e.getSceneX();
+            prevScene[1] = e.getSceneY();
+            prevTime[0]  = now;
+
+            // Cursor relative to disc centre in scene coords (correct regardless of node rotation)
+            javafx.geometry.Point2D centre = sidebarLogoStack.localToScene(
+                sidebarLogoStack.getWidth() / 2.0, sidebarLogoStack.getHeight() / 2.0);
+            double cx = e.getSceneX() - centre.getX();
+            double cy = e.getSceneY() - centre.getY();
+            double r2 = Math.max(cx * cx + cy * cy, 400); // min effective radius 20 px
+
+            // 2-D cross product → tangential drag drives rotation
+            double dRot = (cx * dy - cy * dx) / r2 * (180.0 / Math.PI);
+            if (dt > 0) angVelocity[0] = 0.6 * angVelocity[0] + 0.4 * (dRot / dt);
+            sidebarLogoStack.setRotate(sidebarLogoStack.getRotate() + dRot);
+            e.consume();
+        });
+
+        sidebarLogoStack.setOnMouseReleased(e -> {
+            sidebarLogoStack.setCursor(javafx.scene.Cursor.HAND);
+            double totalDx = e.getSceneX() - pressScene[0];
+            double totalDy = e.getSceneY() - pressScene[1];
+
+            if (Math.hypot(totalDx, totalDy) < 5.0) {
+                double cur = sidebarLogoStack.getRotate();
+                double mod = ((cur % 360) + 360) % 360;
+                double target = (mod <= 180) ? cur - mod : cur + (360 - mod);
+                resetAnim[0] = new Timeline(new KeyFrame(Duration.millis(520),
+                    new KeyValue(sidebarLogoStack.rotateProperty(), target, Interpolator.EASE_BOTH)
+                ));
+                resetAnim[0].play();
+            } else {
+                inertia[0] = new AnimationTimer() {
+                    private long lastNano = 0;
+                    @Override public void handle(long now) {
+                        if (lastNano == 0) { lastNano = now; return; }
+                        double dt = (now - lastNano) / 1_000_000.0;
+                        lastNano = now;
+                        if (dt <= 0 || dt > 100) return;
+                        angVelocity[0] *= Math.pow(0.96, dt / 16.67);
+                        if (Math.abs(angVelocity[0]) < 0.002) { stop(); inertia[0] = null; return; }
+                        sidebarLogoStack.setRotate(sidebarLogoStack.getRotate() + angVelocity[0] * dt);
+                    }
+                };
+                inertia[0].start();
+            }
+            e.consume();
+        });
     }
 
     /**
