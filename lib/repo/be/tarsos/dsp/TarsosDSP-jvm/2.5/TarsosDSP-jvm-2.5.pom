@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>be.tarsos.dsp</groupId>
+  <artifactId>TarsosDSP-jvm</artifactId>
+  <version>2.5</version>
+  <packaging>jar</packaging>
+  <dependencies>
+    <dependency>
+      <groupId>be.tarsos.dsp</groupId>
+      <artifactId>TarsosDSP-core</artifactId>
+      <version>2.5</version>
+    </dependency>
+  </dependencies>
+</project>

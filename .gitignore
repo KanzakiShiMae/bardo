@@ -27,3 +27,6 @@ desktop.ini
 
 # ── Claude Code ───────────────────────────────────────────────
 .claude/
+
+# ── Scripts de build locales ──────────────────────────────────
+scripts/

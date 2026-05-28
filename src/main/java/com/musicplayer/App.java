@@ -21,6 +21,10 @@ public class App extends Application {
             getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm()
         );
 
+        java.net.URL icon = getClass().getResource("/com/musicplayer/icons/icon_full.png");
+        if (icon != null) stage.getIcons().add(new Image(icon.toExternalForm()));
+
+        String v = ConfigLoader.getVersion();
         stage.initStyle(StageStyle.UNDECORATED);
         String v = ConfigLoader.getVersion();
         stage.setTitle(v.isBlank() ? "Bardo" : "Bardo v" + v);

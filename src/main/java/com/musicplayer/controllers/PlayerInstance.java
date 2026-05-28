@@ -55,12 +55,16 @@ public class PlayerInstance {
     public ImageView artView;
     public Canvas    panelWaveCanvas;
     public float[]   waveSmoothed;
+    public float[]   wavePeaks;
     public Timeline  waveDecayAnim;
     public Timeline  waveAnim;      // kept for null-safe legacy refs; not used for real animation
     public Timeline  fadeOutAnim;
     public Label     panelTitle, panelArtist, panelElapsed, panelTotal;
     public Slider    panelProgress, panelVolumeSlider;
-    public Button    panelPlayPause, panelRepeat;
+    public Button    panelPlayPause, panelRepeat, panelShuffleBtn;
+    public VBox      panelSpectroContainer; // legacy — no longer assigned; use panelSpectroCanvas
+    public Canvas    panelSpectroCanvas;
+    public Timeline  spectroTimeline;
 
     // ── Mashup pairing ─────────────────────────────────────────────────────────
     /** For Mashup players: the paired secondary player. Null for normal players. */

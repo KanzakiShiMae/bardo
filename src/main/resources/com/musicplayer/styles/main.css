@@ -469,6 +469,9 @@
     -fx-background-radius: 5px;
     -fx-pref-height: 7px;
 }
+.progress-slider.spectro-mode .track {
+    -fx-opacity: 0.18;
+}
 .progress-slider .thumb {
     -fx-background-color: bardo-accent;
     -fx-background-radius: 50%;
@@ -937,6 +940,30 @@
 .bardo-contrast-light .button .text,
 .bardo-contrast-light .list-cell .text {
     -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.85), 4, 0.12, 0, 0);
+}
+
+/* ── Play button contrast shadow ─────────────────── */
+.bardo-contrast-dark .play-btn {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 8, 0.22, 0, 2);
+}
+.bardo-contrast-light .play-btn {
+    -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.55), 8, 0.22, 0, 0);
+}
+
+/* ── Wave canvas and progress bar contrast shadow ── */
+.bardo-contrast-dark .wave-canvas {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 5, 0.18, 0, 1);
+}
+.bardo-contrast-light .wave-canvas {
+    -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.50), 5, 0.18, 0, 0);
+}
+.bardo-contrast-dark .progress-slider .track,
+.bardo-contrast-dark .progress-slider .thumb {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 4, 0.15, 0, 1);
+}
+.bardo-contrast-light .progress-slider .track,
+.bardo-contrast-light .progress-slider .thumb {
+    -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.50), 4, 0.15, 0, 0);
 }
 
 /* ── Color reset button (settings) ───────────────── */

@@ -6,6 +6,7 @@ import com.musicplayer.models.YouTubePlaylistInfo;
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.DownloadService;
 import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.SpectrogramService;
 import com.musicplayer.services.YouTubeService;
 import javafx.animation.*;
 import javafx.application.Platform;
@@ -22,6 +23,9 @@ import javafx.scene.image.PixelReader;
 import javafx.scene.image.PixelWriter;
 import javafx.scene.image.WritableImage;
 import javafx.scene.paint.Color;
+import javafx.scene.paint.CycleMethod;
+import javafx.scene.paint.LinearGradient;
+import javafx.scene.paint.Stop;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.*;
@@ -32,6 +36,7 @@ import javafx.util.Duration;
 
 import java.io.File;
 import java.net.URL;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -103,6 +108,8 @@ public class MainController implements Initializable {
     @FXML private StackPane contentArea;
     @FXML private VBox      homePanel, searchPanel, libraryPanel, settingsPanel;
 
+    @FXML private Label             appTitleLabel;
+
     @FXML private TextField         searchField;
     @FXML private Button            btnSearchGo, btnSearchVideos, btnSearchPlaylists;
     @FXML private FlowPane          searchResultsPane;
@@ -139,9 +146,10 @@ public class MainController implements Initializable {
     private javafx.stage.Popup toastPopup;
     private SequentialTransition toastAnim;
 
-    private YouTubeService  youTubeService;
-    private LibraryService  libraryService;
-    private DownloadService downloadService;
+    private YouTubeService      youTubeService;
+    private LibraryService      libraryService;
+    private DownloadService     downloadService;
+    private SpectrogramService  spectrogramService;
 
     private final Set<String>        downloadingNow = new HashSet<>();
     private final List<AppTab>       openTabs       = new ArrayList<>();
@@ -151,6 +159,8 @@ public class MainController implements Initializable {
 
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
+
+    private float[] miniWavePeaks = new float[32];
 
     // Tab drag-reorder state
     private AppTab  tabDragging;
@@ -168,9 +178,12 @@ public class MainController implements Initializable {
         appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
 
         libraryService = LibraryService.getInstance();
+        spectrogramService = new SpectrogramService();
         themeManager = new ThemeManager(libraryService, () -> focusedPlayer, activePlayers,
             sidebar, tabBarScroll, nowPlayingBar, contentArea);
         themeManager.loadFromPersistence();
+        String v = ConfigLoader.getVersion();
+        if (appTitleLabel != null) appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
         String apiKey   = libraryService.loadYouTubeApiKey();
         if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
         youTubeService  = new YouTubeService(apiKey);
@@ -215,7 +228,7 @@ public class MainController implements Initializable {
         applyCircularClip();
 
         btnPlayPause.setOnAction(e -> { if (focusedPlayer != null) togglePlayInstance(focusedPlayer); });
-        btnShuffle.setOnAction(e   -> toggleShuffle());
+        btnShuffle.setOnAction(e   -> toggleInlineSpectrogram(focusedPlayer));
         btnRepeat.setOnAction(e    -> toggleRepeat());
         btnPrev.setOnAction(e      -> playPrevInInstance(focusedPlayer));
         btnNext.setOnAction(e      -> playNextInInstance(focusedPlayer));
@@ -292,6 +305,7 @@ public class MainController implements Initializable {
         btnClose.setOnAction(e -> {
             if (globalProgressTimer != null) globalProgressTimer.stop();
             activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
+            spectrogramService.shutdown();
             Platform.exit();
         });
         btnMinimize.setOnAction(e -> stage().setIconified(true));
@@ -719,11 +733,46 @@ public class MainController implements Initializable {
             this::togglePlayInstance,
             p -> navigateTab(-1),
             p -> navigateTab(+1),
-            this::toggleShuffle,
+            () -> toggleInlineSpectrogram(pi),
             (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
             p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
         );
         themeManager.applyContrastStroke(pi.panel, "bardo-text", "bardo-player-bg1");
+    }
+
+    private void toggleInlineSpectrogram(PlayerInstance pi) {
+        if (pi == null || pi.panelSpectroCanvas == null || pi.song == null) {
+            showToast("Reproduce una canción para ver el espectrograma.");
+            return;
+        }
+        boolean show = !pi.panelSpectroCanvas.isVisible();
+        if (show) {
+            String songId = spectrogramService.getSongId(pi.song);
+            if (!spectrogramService.hasCached(songId) && !spectrogramService.isGenerating(songId)) {
+                String path = pi.song.getLocalFilePath();
+                if (path != null) spectrogramService.computeFromFile(songId, Path.of(path));
+            }
+            if (pi.spectroTimeline != null) pi.spectroTimeline.stop();
+            pi.spectroTimeline = SpectrogramPanelBuilder.attachToCanvas(
+                pi.panelSpectroCanvas, pi.song, spectrogramService, pi,
+                () -> {
+                    String hex = themeManager.currentTheme.get("bardo-accent");
+                    return hex != null ? javafx.scene.paint.Color.web(hex)
+                                       : SpectrogramPanelBuilder.FALLBACK_COLOR;
+                });
+            pi.panelSpectroCanvas.setVisible(true);
+            if (pi.panelProgress != null)
+                UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", true);
+        } else {
+            pi.panelSpectroCanvas.setVisible(false);
+            if (pi.spectroTimeline != null) { pi.spectroTimeline.stop(); pi.spectroTimeline = null; }
+            pi.panelSpectroCanvas.getGraphicsContext2D().clearRect(
+                0, 0, pi.panelSpectroCanvas.getWidth(), pi.panelSpectroCanvas.getHeight());
+            if (pi.panelProgress != null)
+                UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
+        }
+        if (pi.panelShuffleBtn != null)
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", show);
     }
 
     private void navigateTab(int direction) {
@@ -745,6 +794,16 @@ public class MainController implements Initializable {
         if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
 
         pi.song = song;
+        if (pi.panelSpectroCanvas != null) {
+            pi.panelSpectroCanvas.setVisible(false);
+            pi.panelSpectroCanvas.getGraphicsContext2D().clearRect(
+                0, 0, pi.panelSpectroCanvas.getWidth(), pi.panelSpectroCanvas.getHeight());
+        }
+        if (pi.spectroTimeline != null) { pi.spectroTimeline.stop(); pi.spectroTimeline = null; }
+        if (pi.panelProgress != null)
+            UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
+        if (pi.panelShuffleBtn != null)
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", false);
         File file = new File(song.getLocalFilePath());
         if (!file.exists()) { showToast("Archivo no encontrado: " + file.getName()); return; }
 
@@ -780,9 +839,10 @@ public class MainController implements Initializable {
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
 
-            // ── Audio spectrum → real-time waveform ──────────────────────────
+            // ── Audio spectrum → forma de onda en tiempo real ────────────────
             final int BANDS = 32;
             pi.waveSmoothed = new float[BANDS];
+            pi.wavePeaks    = new float[BANDS];
             final float[] smoothed = pi.waveSmoothed;
             final boolean[] pending = {false};
             pi.mediaPlayer.setAudioSpectrumNumBands(BANDS);
@@ -795,8 +855,8 @@ public class MainController implements Initializable {
                 if (!pending[0]) {
                     pending[0] = true;
                     Platform.runLater(() -> {
-                        drawWaveCanvas(pi.panelWaveCanvas, smoothed);
-                        if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed);
+                        drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
+                        if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed, miniWavePeaks);
                         pending[0] = false;
                     });
                 }
@@ -943,6 +1003,7 @@ public class MainController implements Initializable {
 
     private void toggleShuffle() { isShuffle = !isShuffle; UIUtils.toggleStyleClass(btnShuffle, "control-active", isShuffle); }
 
+
     private void toggleRepeat() {
         if (focusedPlayer == null) return;
         focusedPlayer.looping = !focusedPlayer.looping;
@@ -956,48 +1017,85 @@ public class MainController implements Initializable {
             UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active", on);
     }
 
-    private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed) {
+    private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed, float[] peaks) {
         if (canvas == null) return;
         javafx.scene.canvas.GraphicsContext gc = canvas.getGraphicsContext2D();
         double w = canvas.getWidth(), h = canvas.getHeight();
         gc.clearRect(0, 0, w, h);
-        if (smoothed == null) return;
+        if (smoothed == null || peaks == null) return;
 
-        boolean isMini = (w <= 60); // mini canvas overlaid on thumbnail
-        double gap    = isMini ? 1.5 : 2.0;
-        double minBarW = isMini ? 2.5 : 4.0;
-        int n = smoothed.length;
-        int displayBars = Math.min(n, Math.max(2, (int)((w + gap) / (minBarW + gap))));
-        if (displayBars % 2 != 0) displayBars--;   // keep even for clean mirror
-        double barW = (w - gap * (displayBars - 1)) / displayBars;
+        boolean isMini = (w <= 100);
+        double gap  = isMini ? 1.0 : 1.5;
+        double barW = isMini ? 2.5 : 4.0;
+        int    n    = smoothed.length;
+        int displayBars = Math.max(2, (int)((w + gap) / (barW + gap)));
+        if (displayBars % 2 != 0) displayBars--;
+        barW = (w - gap * (displayBars - 1)) / displayBars;
         int half = displayBars / 2;
 
-        // Semi-transparent overlay so bars are legible over the art thumbnail
+        String hexA  = themeManager.currentTheme.get("bardo-accent");
+        String hexA2 = themeManager.currentTheme.get("bardo-accent2");
+        Color ca  = hexA  != null ? Color.web(hexA)  : Color.web("#f4a7b9");
+        Color ca2 = hexA2 != null ? Color.web(hexA2) : Color.web("#b39ddb");
+
         if (isMini) {
-            gc.setFill(javafx.scene.paint.Color.rgb(15, 5, 25, 0.35));
+            gc.setFill(Color.rgb(15, 5, 25, 0.35));
             gc.fillRect(0, 0, w, h);
         }
 
+        double centerY = h / 2.0;
+
         for (int i = 0; i < displayBars; i++) {
-            // Mirror: distFromCenter=0 → bass (band 0, loudest), edge → treble
-            int dist = (i < half) ? (half - 1 - i) : (i - half);
-            int bandIdx = (half > 1) ? (int)((double) dist / (half - 1) * (n - 1)) : 0;
-            bandIdx = Math.max(0, Math.min(n - 1, bandIdx));
-            float energy = smoothed[bandIdx];
-            // Smooth with neighbour for visual continuity
-            if (bandIdx + 1 < n) energy = energy * 0.7f + smoothed[bandIdx + 1] * 0.3f;
+            int    dist = (i < half) ? (half - 1 - i) : (i - half);
+            double t    = (half > 1) ? (double) dist / (half - 1) : 0.0;
 
-            double barH = Math.max(isMini ? 2.0 : 3.0, energy * h * 0.92);
+            double bandF  = t * (n - 1);
+            int    bLow   = (int) bandF;
+            int    bHigh  = Math.min(bLow + 1, n - 1);
+            float  frac   = (float)(bandF - bLow);
+            float  energy = smoothed[bLow] * (1 - frac) + smoothed[bHigh] * frac;
+
+            int pkIdx = Math.max(0, Math.min(n - 1, bLow));
+            if (energy > peaks[pkIdx]) peaks[pkIdx] = energy;
+            else peaks[pkIdx] = Math.max(0f, peaks[pkIdx] - 0.011f);
+            float peakEnergy = peaks[pkIdx];
+
+            double halfH     = Math.max(isMini ? 1.5 : 2.0, energy     * centerY * 0.92);
+            double peakHalfH = Math.max(halfH,               peakEnergy * centerY * 0.92);
             double x = i * (barW + gap);
-            double y = (h - barH) / 2.0;
 
-            // Color: center = pink (bass), edges = purple (treble)
-            double t = (half > 1) ? (double) dist / (half - 1) : 0;
-            int r = (int)(244 - t * 64), g = (int)(167 - t * 27), b = (int)(185 + t * 35);
-            gc.setFill(javafx.scene.paint.Color.rgb(r, g, b, isMini ? 0.92 : 0.88));
-            gc.fillRoundRect(x, y, barW, barH, 3, 3);
+            double r = lerp(ca.getRed(),   ca2.getRed(),   t);
+            double g = lerp(ca.getGreen(), ca2.getGreen(), t);
+            double b = lerp(ca.getBlue(),  ca2.getBlue(),  t);
+
+            // Soft glow halo (main canvas only)
+            if (!isMini) {
+                gc.setFill(Color.color(r, g, b, 0.10));
+                gc.fillRoundRect(x - 3, centerY - halfH - 2, barW + 6, halfH * 2 + 4, 6, 6);
+            }
+
+            // Top half — bright at tip, fades to center
+            gc.setFill(new LinearGradient(0, centerY - halfH, 0, centerY, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(r, g, b, isMini ? 0.92 : 0.95)),
+                new Stop(1, Color.color(r, g, b, 0.20))));
+            gc.fillRoundRect(x, centerY - halfH, barW, halfH, 2, 2);
+
+            // Bottom half — mirror
+            gc.setFill(new LinearGradient(0, centerY, 0, centerY + halfH, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(r, g, b, 0.20)),
+                new Stop(1, Color.color(r, g, b, isMini ? 0.92 : 0.95))));
+            gc.fillRoundRect(x, centerY, barW, halfH, 2, 2);
+
+            // Peak caps (main canvas only)
+            if (!isMini && peakHalfH > halfH + 2) {
+                gc.setFill(Color.color(r, g, b, 0.85));
+                gc.fillRect(x, centerY - peakHalfH - 2.5, barW, 2.5);
+                gc.fillRect(x, centerY + peakHalfH,       barW, 2.5);
+            }
         }
     }
+
+    private static double lerp(double a, double b, double t) { return a + t * (b - a); }
 
     private void startWaveDecay(PlayerInstance pi) {
         if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
@@ -1009,8 +1107,8 @@ public class MainController implements Initializable {
                 pi.waveSmoothed[i] *= 0.82f;
                 if (pi.waveSmoothed[i] > 0.004f) allZero = false;
             }
-            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed);
-            if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
+            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
+            if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
             if (allZero) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
         }));
         pi.waveDecayAnim.setCycleCount(Animation.INDEFINITE);
@@ -1068,7 +1166,8 @@ public class MainController implements Initializable {
         if (pi.mashupPartner == null && !pi.isMashupLinked &&
             Math.abs(volumeSlider.getValue() - pi.volume * 100) > 0.5) volumeSlider.setValue(pi.volume * 100);
         if (pi.isPlaying) addGlowEffect(); else removeGlowEffect();
-        drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
+        Arrays.fill(miniWavePeaks, 0f);
+        drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
         updatePlayPauseButton(); updateLoopButtons();
         themeManager.updateDynamicColors();
     }
@@ -1142,6 +1241,7 @@ public class MainController implements Initializable {
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
                 song.setLocalFilePath(path.toString());
+                spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
                 if (group != null) group.incrementPlayCount();
                 libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
                 List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
