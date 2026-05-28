@@ -8,10 +8,12 @@
 <?import javafx.scene.text.*?>
 <?import javafx.geometry.*?>
 
-<BorderPane xmlns="http://javafx.com/javafx/21"
-            xmlns:fx="http://javafx.com/fxml/1"
-            fx:controller="com.musicplayer.controllers.MainController"
-            styleClass="root-pane">
+<StackPane fx:id="mainRootPane"
+           xmlns="http://javafx.com/javafx/21"
+           xmlns:fx="http://javafx.com/fxml/1"
+           fx:controller="com.musicplayer.controllers.MainController">
+
+<BorderPane styleClass="root-pane">
 
     <!-- ═══════════════════ TOP BAR ═══════════════════ -->
     <top>
@@ -184,3 +186,5 @@
     </bottom>
 
 </BorderPane>
+
+</StackPane>

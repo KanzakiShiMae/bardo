@@ -991,3 +991,33 @@
 }
 .theme-color-picker:hover { -fx-background-color: derive(bardo-sidebar-bg, -8%); }
 .theme-color-picker .color-picker-label { -fx-text-fill: bardo-text; -fx-font-size: 12px; }
+
+
+/* ── Loading overlay ───────────────────────────── */
+.loading-overlay {
+    -fx-background-color: radial-gradient(center 50% 50%, radius 80%, bardo-accent2 0%, bardo-accent 100%);
+}
+
+.loading-status-label {
+    -fx-text-fill: #a090b0;
+    -fx-font-size: 13px;
+    -fx-letter-spacing: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.45), 8, 0.0, 0, 1);
+}
+
+.loading-progress-bar {
+    -fx-pref-height: 7px;
+    -fx-background-radius: 4px;
+    -fx-background-color: #ede8f5;
+    -fx-background-insets: 0;
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.35), 6, 0.0, 0, 2);
+}
+.loading-progress-bar .track {
+    -fx-background-color: #ede8f5;
+    -fx-background-radius: 4px;
+}
+.loading-progress-bar .bar {
+    -fx-background-color: linear-gradient(to right, #f4a7b9, #9dc4e8);
+    -fx-background-radius: 4px;
+    -fx-background-insets: 0;
+}

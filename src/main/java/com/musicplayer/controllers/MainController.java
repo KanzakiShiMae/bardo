@@ -88,6 +88,7 @@ import java.util.stream.Collectors;
 public class MainController implements Initializable {
 
     // ── FXML fields ───────────────────────────────────────────────────────────
+    @FXML private javafx.scene.layout.StackPane mainRootPane;
     @FXML private HBox   titleBar;
     @FXML private Label  appTitleLabel;
     @FXML private Button btnClose, btnMinimize, btnMaximize;
@@ -123,6 +124,8 @@ public class MainController implements Initializable {
     @FXML private Label     timeElapsed, timeTotal, volumeLabel;
     @FXML private StackPane vinylContainer;
     @FXML private javafx.scene.canvas.Canvas miniWaveCanvas;
+
+    private LoadingOverlay loadingOverlay;
 
     private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
     private Image  logoPngSource;
@@ -171,6 +174,10 @@ public class MainController implements Initializable {
 
     @Override
     public void initialize(URL url, ResourceBundle rb) {
+        loadingOverlay = new LoadingOverlay(mainRootPane, 1);
+        loadingOverlay.setTargetNode(sidebarLogoStack);
+        loadingOverlay.start();
+
         String v = ConfigLoader.getVersion();
         appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
 
@@ -203,6 +210,7 @@ public class MainController implements Initializable {
                             logoZoneMap   = zoneMap;
                             recolorLogo();
                         }
+                        loadingOverlay.completeTask();
                     });
                 } catch (Exception ex) { ex.printStackTrace(); }
             }, "bardo-logo-prep");
