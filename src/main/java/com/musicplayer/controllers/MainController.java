@@ -70,9 +70,23 @@ import java.util.stream.Collectors;
  * a los agudos. Al pausar, {@link #startWaveDecay} anima la bajada de las barras.
  *
  * <p><b>Pantalla de inicio:</b> {@link #refreshHomePanel()} muestra las canciones pineadas
- * (sección "CANCIONES PINEADAS") y las tres colecciones más reproducidas con ≥ 5
- * reproducciones (sección "COLECCIONES MÁS ESCUCHADAS"). El contador de uso se incrementa
+ * (sección "CANCIONES PINEADAS"), las tres colecciones más reproducidas con ≥ 5
+ * reproducciones (sección "COLECCIONES MÁS ESCUCHADAS") y, si el tracker de cuota está
+ * habilitado, el widget de cuota diaria de la YouTube API. El contador de uso se incrementa
  * en {@link #downloadAndPlay} cada vez que se reproduce una canción de un grupo.
+ *
+ * <p><b>Cuota de YouTube API:</b> {@link com.musicplayer.services.YouTubeQuotaTracker}
+ * estima el consumo diario de unidades de la API (búsqueda = 100 unidades, resto = 1).
+ * Cuando se alcanza el límite, se bloquean las llamadas a la API hasta la medianoche
+ * (hora del Pacífico) y aparece un temporizador de cuenta atrás en el panel de inicio
+ * ligado reactivamente a {@code exhaustedProperty}. Las claves de desarrollador (prefijo
+ * {@code "AIza"}, sufijo {@code "C5ik"}) activan el modo forzado: el límite de 1 000
+ * unidades no puede desactivarse desde Configuración.
+ *
+ * <p><b>Pantalla de carga:</b> {@link LoadingOverlay} muestra un overlay animado durante
+ * el arranque. Las piezas del icono entran desde las esquinas de la pantalla en una
+ * animación de entrada obligatoria; después se ejecuta el bucle de animación hasta que
+ * todas las tareas asíncronas hayan concluido y haya transcurrido el tiempo mínimo.
  *
  * <p><b>Ventana redimensionable:</b> el stage usa {@code UNDECORATED}; {@link ResizeHelper}
  * añade redimensionado por bordes. Doble clic en la barra de título maximiza/restaura;

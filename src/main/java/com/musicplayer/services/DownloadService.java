@@ -6,6 +6,17 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * Gestiona la descarga de audio desde YouTube usando el binario yt-dlp.
+ *
+ * <p>El binario {@code yt-dlp.exe} se extrae desde los recursos del JAR al directorio
+ * {@code %APPDATA%\Bardo\bin\} en el primer uso. Los archivos de audio descargados se
+ * guardan en {@code %APPDATA%\Bardo\audio\{groupId}\{videoId}.m4a}.
+ *
+ * <p>Las operaciones de descarga se ejecutan en hilos del pool común mediante
+ * {@link java.util.concurrent.CompletableFuture#supplyAsync}; el resultado es la
+ * {@link java.nio.file.Path} del archivo descargado.
+ */
 public class DownloadService {
 
     private static final Path BASE_DIR;

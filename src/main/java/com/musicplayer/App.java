@@ -8,6 +8,16 @@ import javafx.scene.image.Image;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 
+/**
+ * Punto de entrada JavaFX de Bardo.
+ *
+ * <p>Configura el {@link javafx.stage.Stage} principal: carga el layout desde
+ * {@code main.fxml}, aplica la hoja de estilos, establece el icono de la aplicación
+ * y fija el título a {@code "Bardo v{version}"}. La ventana usa
+ * {@link javafx.stage.StageStyle#UNDECORATED}; el cromo personalizado y el
+ * redimensionado están gestionados por {@link com.musicplayer.controllers.MainController}
+ * y {@link com.musicplayer.controllers.ResizeHelper}.
+ */
 public class App extends Application {
 
     @Override
