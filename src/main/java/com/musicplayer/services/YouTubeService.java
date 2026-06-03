@@ -13,12 +13,14 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -44,12 +46,15 @@ import java.util.stream.Collectors;
  */
 public class YouTubeService {
 
-    private static final String BASE_URL = "https://www.googleapis.com/youtube/v3";
+    private static final String  BASE_URL         = "https://www.googleapis.com/youtube/v3";
+    private static final Pattern DURATION_PATTERN = Pattern.compile("PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?");
     private final String apiKey;
     private final OkHttpClient http;
+    private final YouTubeQuotaTracker quotaTracker;
 
-    public YouTubeService(String apiKey) {
-        this.apiKey = apiKey;
+    public YouTubeService(String apiKey, YouTubeQuotaTracker quotaTracker) {
+        this.apiKey        = apiKey;
+        this.quotaTracker  = quotaTracker;
         this.http = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
@@ -60,6 +65,7 @@ public class YouTubeService {
 
     public CompletableFuture<ObservableList<Song>> search(String query, int maxResults) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             String url = BASE_URL + "/search"
                 + "?part=snippet"
                 + "&type=video"
@@ -67,7 +73,13 @@ public class YouTubeService {
                 + "&q=" + encode(query)
                 + "&maxResults=" + maxResults
                 + "&key=" + apiKey;
-            return fetch(url, this::parseVideoSearchResults);
+            quotaTracker.record(YouTubeQuotaTracker.COST_SEARCH);
+            try {
+                return parseVideoSearchResults(rawGet(url));
+            } catch (RuntimeException e) {
+                System.err.println("YouTube API error: " + e.getMessage());
+                return FXCollections.observableArrayList();
+            }
         });
     }
 
@@ -75,6 +87,7 @@ public class YouTubeService {
 
     public CompletableFuture<ObservableList<YouTubePlaylistInfo>> searchPlaylists(String query, int maxResults) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             String url = BASE_URL + "/search"
                 + "?part=snippet"
                 + "&type=playlist"
@@ -82,6 +95,7 @@ public class YouTubeService {
                 + "&maxResults=" + maxResults
                 + "&key=" + apiKey;
 
+            quotaTracker.record(YouTubeQuotaTracker.COST_SEARCH);
             String body = rawGet(url);
             List<YouTubePlaylistInfo> playlists = parsePlaylistSearchResults(body);
 
@@ -96,6 +110,7 @@ public class YouTubeService {
                     + "&key=" + apiKey;
 
                 try {
+                    quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
                     String countBody = rawGet(countUrl);
                     Map<String, Integer> counts = parseItemCounts(countBody);
                     playlists.forEach(p -> {
@@ -113,6 +128,7 @@ public class YouTubeService {
 
     public CompletableFuture<ObservableList<Song>> getPlaylistItems(String playlistId) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             ObservableList<Song> all = FXCollections.observableArrayList();
             String pageToken = null;
 
@@ -124,13 +140,10 @@ public class YouTubeService {
                     + "&key=" + apiKey
                     + (pageToken != null ? "&pageToken=" + pageToken : "");
 
-                String body = rawGet(url);
-                JsonObject root = JsonParser.parseString(body).getAsJsonObject();
-                all.addAll(parsePlaylistItems(root.toString()));
-
-                pageToken = root.has("nextPageToken")
-                    ? root.get("nextPageToken").getAsString()
-                    : null;
+                quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
+                JsonObject root = JsonParser.parseString(rawGet(url)).getAsJsonObject();
+                all.addAll(parsePlaylistItems(root));
+                pageToken = root.has("nextPageToken") ? root.get("nextPageToken").getAsString() : null;
 
             } while (pageToken != null);
 
@@ -198,9 +211,8 @@ public class YouTubeService {
         return map;
     }
 
-    private ObservableList<Song> parsePlaylistItems(String json) {
+    private ObservableList<Song> parsePlaylistItems(JsonObject root) {
         ObservableList<Song> songs = FXCollections.observableArrayList();
-        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
         JsonArray items = root.getAsJsonArray("items");
 
         for (JsonElement el : items) {
@@ -225,10 +237,12 @@ public class YouTubeService {
 
     public CompletableFuture<Song> getVideoById(String videoId) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return null;
             String url = BASE_URL + "/videos"
                 + "?part=snippet,contentDetails"
                 + "&id=" + videoId
                 + "&key=" + apiKey;
+            quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
             String body = rawGet(url);
             JsonObject root  = JsonParser.parseString(body).getAsJsonObject();
             JsonArray  items = root.getAsJsonArray("items");
@@ -246,10 +260,12 @@ public class YouTubeService {
 
     public CompletableFuture<YouTubePlaylistInfo> getPlaylistById(String playlistId) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return null;
             String url = BASE_URL + "/playlists"
                 + "?part=snippet,contentDetails"
                 + "&id=" + playlistId
                 + "&key=" + apiKey;
+            quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
             String body  = rawGet(url);
             JsonObject root  = JsonParser.parseString(body).getAsJsonObject();
             JsonArray  items = root.getAsJsonArray("items");
@@ -271,8 +287,7 @@ public class YouTubeService {
 
     private String parseDuration(String iso) {
         if (iso == null || iso.isEmpty()) return "—";
-        java.util.regex.Matcher m = java.util.regex.Pattern
-            .compile("PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?").matcher(iso);
+        java.util.regex.Matcher m = DURATION_PATTERN.matcher(iso);
         if (!m.matches()) return "—";
         int h   = m.group(1) != null ? Integer.parseInt(m.group(1)) : 0;
         int min = m.group(2) != null ? Integer.parseInt(m.group(2)) : 0;
@@ -282,16 +297,6 @@ public class YouTubeService {
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
-
-    private <T> T fetch(String url, java.util.function.Function<String, T> parser) {
-        try {
-            String body = rawGet(url);
-            return parser.apply(body);
-        } catch (RuntimeException e) {
-            System.err.println("YouTube API error (fetch): " + e.getMessage());
-            return parser.apply("{\"items\":[]}");
-        }
-    }
 
     // Throws RuntimeException with the HTTP error body on non-2xx responses.
     private String rawGet(String url) {
@@ -320,7 +325,6 @@ public class YouTubeService {
     }
 
     private String encode(String value) {
-        try { return java.net.URLEncoder.encode(value, "UTF-8"); }
-        catch (Exception e) { return value; }
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }

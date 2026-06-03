@@ -469,6 +469,9 @@
     -fx-background-radius: 5px;
     -fx-pref-height: 7px;
 }
+.progress-slider.spectro-mode .track {
+    -fx-opacity: 0.18;
+}
 .progress-slider .thumb {
     -fx-background-color: bardo-accent;
     -fx-background-radius: 50%;
@@ -939,6 +942,30 @@
     -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.85), 4, 0.12, 0, 0);
 }
 
+/* ── Play button contrast shadow ─────────────────── */
+.bardo-contrast-dark .play-btn {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 8, 0.22, 0, 2);
+}
+.bardo-contrast-light .play-btn {
+    -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.55), 8, 0.22, 0, 0);
+}
+
+/* ── Wave canvas and progress bar contrast shadow ── */
+.bardo-contrast-dark .wave-canvas {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 5, 0.18, 0, 1);
+}
+.bardo-contrast-light .wave-canvas {
+    -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.50), 5, 0.18, 0, 0);
+}
+.bardo-contrast-dark .progress-slider .track,
+.bardo-contrast-dark .progress-slider .thumb {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 4, 0.15, 0, 1);
+}
+.bardo-contrast-light .progress-slider .track,
+.bardo-contrast-light .progress-slider .thumb {
+    -fx-effect: dropshadow(gaussian, rgba(255,255,255,0.50), 4, 0.15, 0, 0);
+}
+
 /* ── Color reset button (settings) ───────────────── */
 .color-reset-btn {
     -fx-border-color: derive(bardo-text-muted, 25%);
@@ -964,3 +991,65 @@
 }
 .theme-color-picker:hover { -fx-background-color: derive(bardo-sidebar-bg, -8%); }
 .theme-color-picker .color-picker-label { -fx-text-fill: bardo-text; -fx-font-size: 12px; }
+
+
+/* ── Loading overlay ───────────────────────────── */
+.loading-overlay {
+    -fx-background-color: radial-gradient(center 50% 50%, radius 80%, bardo-accent2 0%, bardo-accent 100%);
+}
+
+.loading-status-label {
+    -fx-text-fill: #a090b0;
+    -fx-font-size: 13px;
+    -fx-letter-spacing: 1px;
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.45), 8, 0.0, 0, 1);
+}
+
+.loading-progress-bar {
+    -fx-pref-height: 7px;
+    -fx-background-radius: 4px;
+    -fx-background-color: #ede8f5;
+    -fx-background-insets: 0;
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.35), 6, 0.0, 0, 2);
+}
+.loading-progress-bar .track {
+    -fx-background-color: #ede8f5;
+    -fx-background-radius: 4px;
+}
+.loading-progress-bar .bar {
+    -fx-background-color: linear-gradient(to right, #f4a7b9, #9dc4e8);
+    -fx-background-radius: 4px;
+    -fx-background-insets: 0;
+}
+
+/* ── Quota progress bar (home panel) ──────────────────────────────────────── */
+.quota-progress-bar {
+    -fx-pref-height: 6px;
+    -fx-background-radius: 3px;
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+}
+.quota-progress-bar .track {
+    -fx-background-color: derive(bardo-sidebar-bg, -8%);
+    -fx-background-radius: 3px;
+}
+.quota-progress-bar .bar {
+    -fx-background-color: linear-gradient(to right, #9dc4e8, #b8d8a8);
+    -fx-background-radius: 3px;
+    -fx-background-insets: 0;
+}
+.quota-progress-bar.quota-bar-warning .bar {
+    -fx-background-color: linear-gradient(to right, #f4d07a, #f4a855);
+}
+.quota-progress-bar.quota-bar-critical .bar {
+    -fx-background-color: linear-gradient(to right, #f4a7b9, #e07070);
+}
+.quota-info-label {
+    -fx-text-fill: derive(bardo-text-muted, 10%);
+    -fx-font-size: 11px;
+}
+.quota-countdown-label {
+    -fx-text-fill: derive(bardo-accent, -10%);
+    -fx-font-size: 11px;
+    -fx-font-style: italic;
+}

@@ -6,6 +6,9 @@ module com.musicplayer {
     requires okhttp3;
     requires com.google.gson;
     requires java.desktop;
+    requires TarsosDSP.core;
+    requires TarsosDSP.jvm;
+    requires jave.core;
 
     opens com.musicplayer to javafx.fxml;
     opens com.musicplayer.controllers to javafx.fxml;

@@ -8,6 +8,16 @@ import javafx.scene.image.Image;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 
+/**
+ * Punto de entrada JavaFX de Bardo.
+ *
+ * <p>Configura el {@link javafx.stage.Stage} principal: carga el layout desde
+ * {@code main.fxml}, aplica la hoja de estilos, establece el icono de la aplicación
+ * y fija el título a {@code "Bardo v{version}"}. La ventana usa
+ * {@link javafx.stage.StageStyle#UNDECORATED}; el cromo personalizado y el
+ * redimensionado están gestionados por {@link com.musicplayer.controllers.MainController}
+ * y {@link com.musicplayer.controllers.ResizeHelper}.
+ */
 public class App extends Application {
 
     @Override
@@ -21,11 +31,12 @@ public class App extends Application {
             getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm()
         );
 
-        stage.initStyle(StageStyle.UNDECORATED);
+        java.net.URL icon = getClass().getResource("/com/musicplayer/icons/icon_full.png");
+        if (icon != null) stage.getIcons().add(new Image(icon.toExternalForm()));
+
         String v = ConfigLoader.getVersion();
+        stage.initStyle(StageStyle.UNDECORATED);
         stage.setTitle(v.isBlank() ? "Bardo" : "Bardo v" + v);
-        java.net.URL appIcon = getClass().getResource("/com/musicplayer/icons/icon_full.png");
-        if (appIcon != null) stage.getIcons().add(new Image(appIcon.toExternalForm()));
         stage.setFullScreenExitHint("");           // oculta el aviso nativo "Press ESC"
         stage.setScene(scene);
         stage.setMinWidth(900);

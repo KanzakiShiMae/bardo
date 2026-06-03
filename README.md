@@ -1,4 +1,4 @@
-# Bardo v0.2.0-alpha
+# Bardo v0.3.0-alpha
 
 Reproductor de música de escritorio construido con JavaFX 21. Combina biblioteca local, reproducción multicanal simultánea, integración con YouTube y un modo Mashup para mezclar dos canciones en tiempo real.
 
@@ -15,6 +15,9 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
   - *Ambiente* — se duckea automáticamente cuando hay otra canción activa (volumen configurable)
   - *Mashup* — selecciona dos canciones y reprodúcelas simultáneamente con sliders independientes y crossfade animado
 - **Barra de búsqueda** en cada playlist (insensible a mayúsculas y tildes)
+- **Espectrograma** — visualización en la barra de progreso generada con TarsosDSP y almacenada en caché en disco; se muestra como forma de onda con picos cuyo color sigue el acento de la canción en reproducción
+- **Pantalla de carga animada** — overlay de inicio con animación de entrada de las piezas del icono desde las esquinas de la pantalla; se mantiene hasta que todas las tareas asíncronas han finalizado
+- **Easter egg de icono** — el icono del sidebar tiene una animación oculta activable
 - **Interfaz sin cromo nativo** — ventana completamente personalizada, redimensionable y con soporte para maximizar/pantalla completa
 - **Icono de aplicación** — aparece en la barra de tareas de Windows, Alt+Tab y previsualización de ventana
 - **Versión visible** — el título de la barra muestra `Bardo vX.Y.Z`; la versión se lee de `app.properties`, generado por Maven en tiempo de build
@@ -23,6 +26,7 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
 - **Colores dinámicos** — los colores de acento y del reproductor siguen automáticamente los colores dominantes extraídos de la miniatura de la canción en reproducción (extracción por cuantización de tono con 18 cubos de 20°)
 - **Tema completamente personalizable** — todos los colores de la interfaz se configuran desde *Configuración → Apariencia*; cada variable tiene un selector de modo (estático / color primario de canción / color secundario de canción) y un botón de reset individual al color por defecto
 - **Contraste de texto automático (WCAG)** — cuando el ratio de contraste texto/fondo cae por debajo del umbral 3.0, se aplica una sombra suave alrededor del texto para garantizar la legibilidad con cualquier combinación de colores
+- **Contador de cuota YouTube API** — barra de progreso en la pantalla de inicio que muestra el consumo diario estimado de unidades (búsqueda = 100 unidades, resto = 1). Al alcanzar el límite: notificación toast, bloqueo de llamadas API y cuenta atrás hasta la medianoche (hora del Pacífico). El límite (por defecto 1 000 unidades/día) es configurable desde *Configuración*; las claves de desarrollador tienen el límite forzado a 1 000 y no pueden desactivarlo
 
 ---
 
@@ -87,6 +91,8 @@ Al arrancar por primera vez (sin clave configurada) aparecerá un diálogo que t
 |---|---|
 | UI | JavaFX 21 (FXML + CSS) |
 | Reproducción | `javafx.scene.media.MediaPlayer` |
+| Análisis de audio | TarsosDSP (FFT, espectrograma) |
+| Conversión de audio | JAVE2 (wrapper de FFmpeg) |
 | API de YouTube | YouTube Data API v3 |
 | HTTP | OkHttp 4 |
 | JSON | Gson |
@@ -105,13 +111,15 @@ src/main/
 │   ├── controllers/
 │   │   ├── MainController.java           # Coordinador principal
 │   │   ├── ThemeManager.java             # Estado y lógica de temas y colores dinámicos
-│   │   ├── SettingsPanelBuilder.java     # Panel de Configuración
+│   │   ├── SettingsPanelBuilder.java     # Panel de Configuración (incluye sección de cuota)
 │   │   ├── PlayerInstance.java           # Estado de un reproductor activo
 │   │   ├── PlayerPanelBuilder.java       # Panel completo del reproductor
 │   │   ├── MashupPanelBuilder.java       # Panel del reproductor Mashup
 │   │   ├── GroupDetailBuilder.java       # Vista de detalle de una playlist
 │   │   ├── CardBuilder.java              # Tarjetas de inicio y búsqueda
 │   │   ├── DownloadDialogs.java          # Diálogos de descarga masiva
+│   │   ├── LoadingOverlay.java           # Overlay de carga animado en el arranque
+│   │   ├── SpectrogramPanelBuilder.java  # Renderizador de espectrograma sobre el slider
 │   │   ├── AppTab.java                   # Datos de una pestaña
 │   │   ├── ResizeHelper.java             # Redimensionado de ventana UNDECORATED
 │   │   └── UIUtils.java                  # Utilidades (formato, CSS, navegador)
@@ -122,9 +130,11 @@ src/main/
 │   └── services/
 │       ├── ConfigLoader.java             # Carga config.properties y app.properties
 │       ├── YouTubeService.java           # Búsqueda y playlists via YouTube API
+│       ├── YouTubeQuotaTracker.java      # Estimación y límite de cuota diaria de la API
 │       ├── DownloadService.java          # Descarga de audio (yt-dlp)
+│       ├── SpectrogramService.java       # Cómputo y caché de espectrogramas (TarsosDSP)
 │       ├── LibraryService.java           # Singleton de biblioteca en memoria
-│       └── PersistenceService.java       # Serialización JSON a disco
+│       └── PersistenceService.java       # Serialización JSON a disco + ruta base de datos
 └── resources/com/musicplayer/
     ├── views/main.fxml                   # Layout principal
     ├── styles/main.css                   # Hoja de estilos
@@ -134,7 +144,10 @@ src/main/
     │   ├── icon.png                      # Icono del sidebar (capa base, coloreable)
     │   ├── icon_filter.png               # Capa intermedia del icono del sidebar
     │   ├── icon_border.png               # Capa superior del icono del sidebar (bordes)
-    │   └── icon_full.png                 # Icono de aplicación (taskbar, Alt+Tab)
+    │   ├── icon_full.png                 # Icono de aplicación (taskbar, Alt+Tab)
+    │   ├── icon_full1.png                # Pieza 1 del icono para la animación de carga
+    │   ├── icon_full2.png                # Pieza 2 del icono para la animación de carga
+    │   └── icon_full3.png                # Pieza 3 del icono para la animación de carga
     └── bin/yt-dlp.exe                    # Binario de descarga (solo Windows)
 ```
 
@@ -148,10 +161,19 @@ La versión se define **únicamente** en `<version>` de `pom.xml`. Maven la inye
 
 ## Datos de usuario
 
-La biblioteca y la configuración (incluida la clave de API) se guardan automáticamente en:
+La biblioteca, la configuración y la caché de espectrogramas se guardan automáticamente en:
 
 - **Windows:** `%APPDATA%\Bardo\`
 - **Linux/macOS:** `~/.bardo/`
+
+| Archivo / Carpeta | Contenido |
+|---|---|
+| `library.json` | Grupos, canciones y canciones pineadas |
+| `settings.json` | Volumen, ducking, clave de API y tema |
+| `quota.json` | Consumo diario de unidades de la YouTube API |
+| `audio/` | Archivos de audio descargados por grupo |
+| `spectrograms/` | Espectrogramas precalculados (formato `.spg`) |
+| `bin/yt-dlp.exe` | Binario extraído del JAR en el primer uso |
 
 Estos directorios no forman parte del repositorio.
 

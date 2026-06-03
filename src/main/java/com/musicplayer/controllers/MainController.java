@@ -6,6 +6,8 @@ import com.musicplayer.models.YouTubePlaylistInfo;
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.DownloadService;
 import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.SpectrogramService;
+import com.musicplayer.services.YouTubeQuotaTracker;
 import com.musicplayer.services.YouTubeService;
 import javafx.animation.*;
 import javafx.application.Platform;
@@ -19,9 +21,11 @@ import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.image.PixelReader;
-import javafx.scene.image.PixelWriter;
 import javafx.scene.image.WritableImage;
 import javafx.scene.paint.Color;
+import javafx.scene.paint.CycleMethod;
+import javafx.scene.paint.LinearGradient;
+import javafx.scene.paint.Stop;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.*;
@@ -32,6 +36,7 @@ import javafx.util.Duration;
 
 import java.io.File;
 import java.net.URL;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -65,9 +70,23 @@ import java.util.stream.Collectors;
  * a los agudos. Al pausar, {@link #startWaveDecay} anima la bajada de las barras.
  *
  * <p><b>Pantalla de inicio:</b> {@link #refreshHomePanel()} muestra las canciones pineadas
- * (sección "CANCIONES PINEADAS") y las tres colecciones más reproducidas con ≥ 5
- * reproducciones (sección "COLECCIONES MÁS ESCUCHADAS"). El contador de uso se incrementa
+ * (sección "CANCIONES PINEADAS"), las tres colecciones más reproducidas con ≥ 5
+ * reproducciones (sección "COLECCIONES MÁS ESCUCHADAS") y, si el tracker de cuota está
+ * habilitado, el widget de cuota diaria de la YouTube API. El contador de uso se incrementa
  * en {@link #downloadAndPlay} cada vez que se reproduce una canción de un grupo.
+ *
+ * <p><b>Cuota de YouTube API:</b> {@link com.musicplayer.services.YouTubeQuotaTracker}
+ * estima el consumo diario de unidades de la API (búsqueda = 100 unidades, resto = 1).
+ * Cuando se alcanza el límite, se bloquean las llamadas a la API hasta la medianoche
+ * (hora del Pacífico) y aparece un temporizador de cuenta atrás en el panel de inicio
+ * ligado reactivamente a {@code exhaustedProperty}. Las claves de desarrollador (prefijo
+ * {@code "AIza"}, sufijo {@code "C5ik"}) activan el modo forzado: el límite de 1 000
+ * unidades no puede desactivarse desde Configuración.
+ *
+ * <p><b>Pantalla de carga:</b> {@link LoadingOverlay} muestra un overlay animado durante
+ * el arranque. Las piezas del icono entran desde las esquinas de la pantalla en una
+ * animación de entrada obligatoria; después se ejecuta el bucle de animación hasta que
+ * todas las tareas asíncronas hayan concluido y haya transcurrido el tiempo mínimo.
  *
  * <p><b>Ventana redimensionable:</b> el stage usa {@code UNDECORATED}; {@link ResizeHelper}
  * añade redimensionado por bordes. Doble clic en la barra de título maximiza/restaura;
@@ -84,6 +103,7 @@ import java.util.stream.Collectors;
 public class MainController implements Initializable {
 
     // ── FXML fields ───────────────────────────────────────────────────────────
+    @FXML private javafx.scene.layout.StackPane mainRootPane;
     @FXML private HBox   titleBar;
     @FXML private Label  appTitleLabel;
     @FXML private Button btnClose, btnMinimize, btnMaximize;
@@ -120,6 +140,8 @@ public class MainController implements Initializable {
     @FXML private StackPane vinylContainer;
     @FXML private javafx.scene.canvas.Canvas miniWaveCanvas;
 
+    private LoadingOverlay loadingOverlay;
+
     private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
     private Image  logoPngSource;
     private byte[] logoZoneMap;
@@ -139,9 +161,11 @@ public class MainController implements Initializable {
     private javafx.stage.Popup toastPopup;
     private SequentialTransition toastAnim;
 
-    private YouTubeService  youTubeService;
-    private LibraryService  libraryService;
-    private DownloadService downloadService;
+    private YouTubeService      youTubeService;
+    private YouTubeQuotaTracker quotaTracker;
+    private LibraryService      libraryService;
+    private DownloadService     downloadService;
+    private SpectrogramService  spectrogramService;
 
     private final Set<String>        downloadingNow = new HashSet<>();
     private final List<AppTab>       openTabs       = new ArrayList<>();
@@ -151,6 +175,8 @@ public class MainController implements Initializable {
 
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
+
+    private float[] miniWavePeaks = new float[32];
 
     // Tab drag-reorder state
     private AppTab  tabDragging;
@@ -164,17 +190,27 @@ public class MainController implements Initializable {
 
     @Override
     public void initialize(URL url, ResourceBundle rb) {
+        loadingOverlay = new LoadingOverlay(mainRootPane, 1);
+        loadingOverlay.setTargetNode(sidebarLogoStack);
+        loadingOverlay.start();
+
+
         String v = ConfigLoader.getVersion();
         appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
 
         libraryService = LibraryService.getInstance();
+        spectrogramService = new SpectrogramService();
         themeManager = new ThemeManager(libraryService, () -> focusedPlayer, activePlayers,
             sidebar, tabBarScroll, nowPlayingBar, contentArea);
         themeManager.loadFromPersistence();
         String apiKey   = libraryService.loadYouTubeApiKey();
         if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
-        youTubeService  = new YouTubeService(apiKey);
+        quotaTracker    = new YouTubeQuotaTracker(apiKey);
+        youTubeService  = new YouTubeService(apiKey, quotaTracker);
         downloadService = new DownloadService();
+        quotaTracker.exhaustedProperty().addListener((obs, wasEx, isEx) -> {
+            if (isEx) showToast("Cuota de YouTube API agotada. La búsqueda se reanudará a medianoche (hora del Pacífico).");
+        });
 
         URL iconUrl   = getClass().getResource("/com/musicplayer/icons/icon.png");
         URL filterUrl = getClass().getResource("/com/musicplayer/icons/icon_filter.png");
@@ -195,6 +231,7 @@ public class MainController implements Initializable {
                             logoZoneMap   = zoneMap;
                             recolorLogo();
                         }
+                        loadingOverlay.completeTask();
                     });
                 } catch (Exception ex) { ex.printStackTrace(); }
             }, "bardo-logo-prep");
@@ -209,13 +246,14 @@ public class MainController implements Initializable {
         setupVolumeSlider();
         volumeSlider.setValue(libraryService.loadVolume());
         setupSidebarNavigation();
-        SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService,
+        SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService, quotaTracker,
             pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); });
         ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
         applyCircularClip();
+        setupLogoDrag();
 
         btnPlayPause.setOnAction(e -> { if (focusedPlayer != null) togglePlayInstance(focusedPlayer); });
-        btnShuffle.setOnAction(e   -> toggleShuffle());
+        btnShuffle.setOnAction(e   -> toggleInlineSpectrogram(focusedPlayer));
         btnRepeat.setOnAction(e    -> toggleRepeat());
         btnPrev.setOnAction(e      -> playPrevInInstance(focusedPlayer));
         btnNext.setOnAction(e      -> playNextInInstance(focusedPlayer));
@@ -292,6 +330,7 @@ public class MainController implements Initializable {
         btnClose.setOnAction(e -> {
             if (globalProgressTimer != null) globalProgressTimer.stop();
             activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
+            spectrogramService.shutdown();
             Platform.exit();
         });
         btnMinimize.setOnAction(e -> stage().setIconified(true));
@@ -687,7 +726,38 @@ public class MainController implements Initializable {
     }
 
     private void openSongPaused(Song song, LibraryGroup group) {
-        if (!song.isLocal()) { showToast("Descarga la canción primero"); return; }
+        if (song.isLocal()) { doOpenSongPaused(song, group); return; }
+        final LibraryGroup target = group != null ? group : libraryService.getOrCreateHistorial();
+        if (group == null) target.addSong(song);
+        downloadThen(song, target, () -> doOpenSongPaused(song, group));
+    }
+
+    private void downloadThen(Song song, LibraryGroup target, Runnable onReady) {
+        String vid = song.getVideoId();
+        if (downloadingNow.contains(vid)) { showToast("Ya se está descargando «" + song.getTitle() + "»"); return; }
+        downloadingNow.add(vid);
+        nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
+        nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
+
+        downloadService.downloadAudio(song, target.getId())
+            .thenAccept(path -> Platform.runLater(() -> {
+                downloadingNow.remove(vid);
+                song.setLocalFilePath(path.toString());
+                spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
+                libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
+                onReady.run();
+            }))
+            .exceptionally(ex -> {
+                Platform.runLater(() -> {
+                    downloadingNow.remove(vid);
+                    showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
+                    updateMiniPlayerVisibility();
+                });
+                return null;
+            });
+    }
+
+    private void doOpenSongPaused(Song song, LibraryGroup group) {
         List<Song> q = group != null
             ? group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList())
             : List.of(song);
@@ -708,7 +778,6 @@ public class MainController implements Initializable {
             if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
         }
 
-        // Stay on the previous view
         if (prevTab != null) activateTab(prevTab);
         if (prevFocused != null) setFocusedPlayer(prevFocused);
         rebuildTabBar();
@@ -719,11 +788,46 @@ public class MainController implements Initializable {
             this::togglePlayInstance,
             p -> navigateTab(-1),
             p -> navigateTab(+1),
-            this::toggleShuffle,
+            () -> toggleInlineSpectrogram(pi),
             (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
             p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
         );
         themeManager.applyContrastStroke(pi.panel, "bardo-text", "bardo-player-bg1");
+    }
+
+    private void toggleInlineSpectrogram(PlayerInstance pi) {
+        if (pi == null || pi.panelSpectroCanvas == null || pi.song == null) {
+            showToast("Reproduce una canción para ver el espectrograma.");
+            return;
+        }
+        boolean show = !pi.panelSpectroCanvas.isVisible();
+        if (show) {
+            String songId = spectrogramService.getSongId(pi.song);
+            if (!spectrogramService.hasCached(songId) && !spectrogramService.isGenerating(songId)) {
+                String path = pi.song.getLocalFilePath();
+                if (path != null) spectrogramService.computeFromFile(songId, Path.of(path));
+            }
+            if (pi.spectroTimeline != null) pi.spectroTimeline.stop();
+            pi.spectroTimeline = SpectrogramPanelBuilder.attachToCanvas(
+                pi.panelSpectroCanvas, pi.song, spectrogramService, pi,
+                () -> {
+                    String hex = themeManager.currentTheme.get("bardo-accent");
+                    return hex != null ? javafx.scene.paint.Color.web(hex)
+                                       : SpectrogramPanelBuilder.FALLBACK_COLOR;
+                });
+            pi.panelSpectroCanvas.setVisible(true);
+            if (pi.panelProgress != null)
+                UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", true);
+        } else {
+            pi.panelSpectroCanvas.setVisible(false);
+            if (pi.spectroTimeline != null) { pi.spectroTimeline.stop(); pi.spectroTimeline = null; }
+            pi.panelSpectroCanvas.getGraphicsContext2D().clearRect(
+                0, 0, pi.panelSpectroCanvas.getWidth(), pi.panelSpectroCanvas.getHeight());
+            if (pi.panelProgress != null)
+                UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
+        }
+        if (pi.panelShuffleBtn != null)
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", show);
     }
 
     private void navigateTab(int direction) {
@@ -745,6 +849,16 @@ public class MainController implements Initializable {
         if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
 
         pi.song = song;
+        if (pi.panelSpectroCanvas != null) {
+            pi.panelSpectroCanvas.setVisible(false);
+            pi.panelSpectroCanvas.getGraphicsContext2D().clearRect(
+                0, 0, pi.panelSpectroCanvas.getWidth(), pi.panelSpectroCanvas.getHeight());
+        }
+        if (pi.spectroTimeline != null) { pi.spectroTimeline.stop(); pi.spectroTimeline = null; }
+        if (pi.panelProgress != null)
+            UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
+        if (pi.panelShuffleBtn != null)
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", false);
         File file = new File(song.getLocalFilePath());
         if (!file.exists()) { showToast("Archivo no encontrado: " + file.getName()); return; }
 
@@ -780,9 +894,10 @@ public class MainController implements Initializable {
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
 
-            // ── Audio spectrum → real-time waveform ──────────────────────────
+            // ── Audio spectrum → forma de onda en tiempo real ────────────────
             final int BANDS = 32;
             pi.waveSmoothed = new float[BANDS];
+            pi.wavePeaks    = new float[BANDS];
             final float[] smoothed = pi.waveSmoothed;
             final boolean[] pending = {false};
             pi.mediaPlayer.setAudioSpectrumNumBands(BANDS);
@@ -795,8 +910,8 @@ public class MainController implements Initializable {
                 if (!pending[0]) {
                     pending[0] = true;
                     Platform.runLater(() -> {
-                        drawWaveCanvas(pi.panelWaveCanvas, smoothed);
-                        if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed);
+                        drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
+                        if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed, miniWavePeaks);
                         pending[0] = false;
                     });
                 }
@@ -943,6 +1058,7 @@ public class MainController implements Initializable {
 
     private void toggleShuffle() { isShuffle = !isShuffle; UIUtils.toggleStyleClass(btnShuffle, "control-active", isShuffle); }
 
+
     private void toggleRepeat() {
         if (focusedPlayer == null) return;
         focusedPlayer.looping = !focusedPlayer.looping;
@@ -956,48 +1072,85 @@ public class MainController implements Initializable {
             UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active", on);
     }
 
-    private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed) {
+    private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed, float[] peaks) {
         if (canvas == null) return;
         javafx.scene.canvas.GraphicsContext gc = canvas.getGraphicsContext2D();
         double w = canvas.getWidth(), h = canvas.getHeight();
         gc.clearRect(0, 0, w, h);
-        if (smoothed == null) return;
+        if (smoothed == null || peaks == null) return;
 
-        boolean isMini = (w <= 60); // mini canvas overlaid on thumbnail
-        double gap    = isMini ? 1.5 : 2.0;
-        double minBarW = isMini ? 2.5 : 4.0;
-        int n = smoothed.length;
-        int displayBars = Math.min(n, Math.max(2, (int)((w + gap) / (minBarW + gap))));
-        if (displayBars % 2 != 0) displayBars--;   // keep even for clean mirror
-        double barW = (w - gap * (displayBars - 1)) / displayBars;
+        boolean isMini = (w <= 100);
+        double gap  = isMini ? 1.0 : 1.5;
+        double barW = isMini ? 2.5 : 4.0;
+        int    n    = smoothed.length;
+        int displayBars = Math.max(2, (int)((w + gap) / (barW + gap)));
+        if (displayBars % 2 != 0) displayBars--;
+        barW = (w - gap * (displayBars - 1)) / displayBars;
         int half = displayBars / 2;
 
-        // Semi-transparent overlay so bars are legible over the art thumbnail
+        String hexA  = themeManager.currentTheme.get("bardo-accent");
+        String hexA2 = themeManager.currentTheme.get("bardo-accent2");
+        Color ca  = hexA  != null ? Color.web(hexA)  : Color.web("#f4a7b9");
+        Color ca2 = hexA2 != null ? Color.web(hexA2) : Color.web("#b39ddb");
+
         if (isMini) {
-            gc.setFill(javafx.scene.paint.Color.rgb(15, 5, 25, 0.35));
+            gc.setFill(Color.rgb(15, 5, 25, 0.35));
             gc.fillRect(0, 0, w, h);
         }
 
+        double centerY = h / 2.0;
+
         for (int i = 0; i < displayBars; i++) {
-            // Mirror: distFromCenter=0 → bass (band 0, loudest), edge → treble
-            int dist = (i < half) ? (half - 1 - i) : (i - half);
-            int bandIdx = (half > 1) ? (int)((double) dist / (half - 1) * (n - 1)) : 0;
-            bandIdx = Math.max(0, Math.min(n - 1, bandIdx));
-            float energy = smoothed[bandIdx];
-            // Smooth with neighbour for visual continuity
-            if (bandIdx + 1 < n) energy = energy * 0.7f + smoothed[bandIdx + 1] * 0.3f;
+            int    dist = (i < half) ? (half - 1 - i) : (i - half);
+            double t    = (half > 1) ? (double) dist / (half - 1) : 0.0;
 
-            double barH = Math.max(isMini ? 2.0 : 3.0, energy * h * 0.92);
+            double bandF  = t * (n - 1);
+            int    bLow   = (int) bandF;
+            int    bHigh  = Math.min(bLow + 1, n - 1);
+            float  frac   = (float)(bandF - bLow);
+            float  energy = smoothed[bLow] * (1 - frac) + smoothed[bHigh] * frac;
+
+            int pkIdx = Math.max(0, Math.min(n - 1, bLow));
+            if (energy > peaks[pkIdx]) peaks[pkIdx] = energy;
+            else peaks[pkIdx] = Math.max(0f, peaks[pkIdx] - 0.011f);
+            float peakEnergy = peaks[pkIdx];
+
+            double halfH     = Math.max(isMini ? 1.5 : 2.0, energy     * centerY * 0.92);
+            double peakHalfH = Math.max(halfH,               peakEnergy * centerY * 0.92);
             double x = i * (barW + gap);
-            double y = (h - barH) / 2.0;
 
-            // Color: center = pink (bass), edges = purple (treble)
-            double t = (half > 1) ? (double) dist / (half - 1) : 0;
-            int r = (int)(244 - t * 64), g = (int)(167 - t * 27), b = (int)(185 + t * 35);
-            gc.setFill(javafx.scene.paint.Color.rgb(r, g, b, isMini ? 0.92 : 0.88));
-            gc.fillRoundRect(x, y, barW, barH, 3, 3);
+            double r = lerp(ca.getRed(),   ca2.getRed(),   t);
+            double g = lerp(ca.getGreen(), ca2.getGreen(), t);
+            double b = lerp(ca.getBlue(),  ca2.getBlue(),  t);
+
+            // Soft glow halo (main canvas only)
+            if (!isMini) {
+                gc.setFill(Color.color(r, g, b, 0.10));
+                gc.fillRoundRect(x - 3, centerY - halfH - 2, barW + 6, halfH * 2 + 4, 6, 6);
+            }
+
+            // Top half — bright at tip, fades to center
+            gc.setFill(new LinearGradient(0, centerY - halfH, 0, centerY, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(r, g, b, isMini ? 0.92 : 0.95)),
+                new Stop(1, Color.color(r, g, b, 0.20))));
+            gc.fillRoundRect(x, centerY - halfH, barW, halfH, 2, 2);
+
+            // Bottom half — mirror
+            gc.setFill(new LinearGradient(0, centerY, 0, centerY + halfH, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(r, g, b, 0.20)),
+                new Stop(1, Color.color(r, g, b, isMini ? 0.92 : 0.95))));
+            gc.fillRoundRect(x, centerY, barW, halfH, 2, 2);
+
+            // Peak caps (main canvas only)
+            if (!isMini && peakHalfH > halfH + 2) {
+                gc.setFill(Color.color(r, g, b, 0.85));
+                gc.fillRect(x, centerY - peakHalfH - 2.5, barW, 2.5);
+                gc.fillRect(x, centerY + peakHalfH,       barW, 2.5);
+            }
         }
     }
+
+    private static double lerp(double a, double b, double t) { return a + t * (b - a); }
 
     private void startWaveDecay(PlayerInstance pi) {
         if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
@@ -1009,8 +1162,8 @@ public class MainController implements Initializable {
                 pi.waveSmoothed[i] *= 0.82f;
                 if (pi.waveSmoothed[i] > 0.004f) allZero = false;
             }
-            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed);
-            if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
+            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
+            if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
             if (allZero) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
         }));
         pi.waveDecayAnim.setCycleCount(Animation.INDEFINITE);
@@ -1068,9 +1221,10 @@ public class MainController implements Initializable {
         if (pi.mashupPartner == null && !pi.isMashupLinked &&
             Math.abs(volumeSlider.getValue() - pi.volume * 100) > 0.5) volumeSlider.setValue(pi.volume * 100);
         if (pi.isPlaying) addGlowEffect(); else removeGlowEffect();
-        drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed);
+        Arrays.fill(miniWavePeaks, 0f);
+        drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
         updatePlayPauseButton(); updateLoopButtons();
-        themeManager.updateDynamicColors();
+        if (pi.isPlaying) themeManager.updateDynamicColors();
     }
 
     @FXML private void onSwitchFocusedPlayer() {
@@ -1132,29 +1286,11 @@ public class MainController implements Initializable {
         final LibraryGroup target = group != null ? group : libraryService.getOrCreateHistorial();
         if (group == null) target.addSong(song);
 
-        String vid = song.getVideoId();
-        if (downloadingNow.contains(vid)) { showToast("Ya se está descargando «" + song.getTitle() + "»"); return; }
-        downloadingNow.add(vid);
-        nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
-        nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
-
-        downloadService.downloadAudio(song, target.getId())
-            .thenAccept(path -> Platform.runLater(() -> {
-                downloadingNow.remove(vid);
-                song.setLocalFilePath(path.toString());
-                if (group != null) group.incrementPlayCount();
-                libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
-                List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
-                playSongInQueue(song, locals.isEmpty() ? List.of(song) : locals);
-            }))
-            .exceptionally(ex -> {
-                Platform.runLater(() -> {
-                    downloadingNow.remove(vid);
-                    showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
-                    updateMiniPlayerVisibility();
-                });
-                return null;
-            });
+        downloadThen(song, target, () -> {
+            if (group != null) group.incrementPlayCount();
+            List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
+            playSongInQueue(song, locals.isEmpty() ? List.of(song) : locals);
+        });
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
@@ -1311,7 +1447,7 @@ public class MainController implements Initializable {
             (song, grp) -> downloadAndPlay(song, grp),
             (song, grp) -> openSongPaused(song, grp),
             songs -> openMashupPlayer(songs.get(0), songs.get(1)),
-            libraryService, this::showToast);
+            libraryService, this::showToast, this::refreshHomePanel);
         openTab(tabId, group.isYoutubePlaylist() ? "📺" : "📋", group.getName(), panel, true, btnLibrary);
         themeManager.applyContrastStroke(panel, "bardo-text", "bardo-bg");
     }
@@ -1508,38 +1644,82 @@ public class MainController implements Initializable {
             hint.getStyleClass().add("empty-library-hint");
             VBox.setVgrow(hint, Priority.ALWAYS);
             homePanel.getChildren().add(hint);
-            return;
+        } else {
+            ScrollPane scroll = new ScrollPane();
+            scroll.setFitToWidth(true);
+            scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            scroll.getStyleClass().add("results-scroll");
+            VBox.setVgrow(scroll, Priority.ALWAYS);
+
+            VBox sections = new VBox(24);
+            sections.setPadding(new javafx.geometry.Insets(4, 0, 12, 0));
+
+            if (!pinned.isEmpty()) {
+                Label sectionLbl = new Label("CANCIONES PINEADAS");
+                sectionLbl.getStyleClass().add("sidebar-section-label");
+                javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
+                pinnedFlow.setAlignment(Pos.TOP_LEFT);
+                pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
+                sections.getChildren().addAll(sectionLbl, pinnedFlow);
+            }
+
+            if (!top.isEmpty()) {
+                Label sectionLbl = new Label("COLECCIONES MÁS ESCUCHADAS");
+                sectionLbl.getStyleClass().add("sidebar-section-label");
+                HBox topRow = new HBox(20);
+                topRow.setAlignment(Pos.CENTER_LEFT);
+                top.forEach(g -> topRow.getChildren().add(buildTopPlaylistCard(g)));
+                sections.getChildren().addAll(sectionLbl, topRow);
+            }
+
+            scroll.setContent(sections);
+            homePanel.getChildren().add(scroll);
         }
 
-        ScrollPane scroll = new ScrollPane();
-        scroll.setFitToWidth(true);
-        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        scroll.getStyleClass().add("results-scroll");
-        VBox.setVgrow(scroll, Priority.ALWAYS);
+        if (quotaTracker.isEnabled()) homePanel.getChildren().add(buildQuotaWidget());
+    }
 
-        VBox sections = new VBox(24);
-        sections.setPadding(new javafx.geometry.Insets(4, 0, 12, 0));
+    private VBox buildQuotaWidget() {
+        int max  = quotaTracker.getDailyMax();
+        int used = quotaTracker.getUsedToday();
 
-        if (!pinned.isEmpty()) {
-            Label sectionLbl = new Label("CANCIONES PINEADAS");
-            sectionLbl.getStyleClass().add("sidebar-section-label");
-            javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
-            pinnedFlow.setAlignment(Pos.TOP_LEFT);
-            pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
-            sections.getChildren().addAll(sectionLbl, pinnedFlow);
-        }
+        Label title = new Label("CUOTA YOUTUBE API (HOY)");
+        title.getStyleClass().add("sidebar-section-label");
 
-        if (!top.isEmpty()) {
-            Label sectionLbl = new Label("COLECCIONES MÁS ESCUCHADAS");
-            sectionLbl.getStyleClass().add("sidebar-section-label");
-            HBox topRow = new HBox(20);
-            topRow.setAlignment(Pos.CENTER_LEFT);
-            top.forEach(g -> topRow.getChildren().add(buildTopPlaylistCard(g)));
-            sections.getChildren().addAll(sectionLbl, topRow);
-        }
+        ProgressBar bar = new ProgressBar();
+        bar.progressProperty().bind(quotaTracker.usedTodayProperty().divide((double) max));
+        bar.setMaxWidth(Double.MAX_VALUE);
+        bar.getStyleClass().add("quota-progress-bar");
+        if (quotaTracker.isExhausted() || used >= max * 0.8) bar.getStyleClass().add("quota-bar-critical");
+        else if (used >= max * 0.5)                          bar.getStyleClass().add("quota-bar-warning");
 
-        scroll.setContent(sections);
-        homePanel.getChildren().add(scroll);
+        Label usedLbl = new Label();
+        usedLbl.textProperty().bind(
+            quotaTracker.usedTodayProperty().asString().concat(" / " + max + " unidades"));
+        usedLbl.getStyleClass().add("quota-info-label");
+
+        // Countdown: always present; visible only when quota exhausted
+        Label countdownLbl = new Label();
+        countdownLbl.getStyleClass().add("quota-countdown-label");
+        countdownLbl.visibleProperty().bind(quotaTracker.exhaustedProperty());
+        countdownLbl.managedProperty().bind(quotaTracker.exhaustedProperty());
+        Runnable tick = () ->
+            countdownLbl.setText("· reinicia en " + quotaTracker.getTimeUntilResetString());
+        tick.run();
+        Timeline timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> tick.run()));
+        timer.setCycleCount(Animation.INDEFINITE);
+        quotaTracker.exhaustedProperty().addListener((obs, was, is) -> {
+            if (Boolean.TRUE.equals(is)) timer.play(); else timer.stop();
+        });
+        if (quotaTracker.isExhausted()) timer.play();
+        homeCarouselTimelines.add(timer);
+
+        HBox infoRow = new HBox(10, usedLbl, countdownLbl);
+        infoRow.setAlignment(Pos.CENTER_LEFT);
+
+        VBox box = new VBox(6, title, bar, infoRow);
+        box.setPadding(new javafx.geometry.Insets(12, 0, 4, 0));
+        return box;
     }
 
     private VBox buildTopPlaylistCard(LibraryGroup group) {
@@ -1768,6 +1948,81 @@ public class MainController implements Initializable {
         });
         logoFadeAnim = fadeIn;
         logoFadeAnim.play();
+    }
+
+    private void setupLogoDrag() {
+        final double[] pressScene  = {0, 0};
+        final double[] prevScene   = {0, 0};
+        final long[]   prevTime    = {0};
+        final double[] angVelocity = {0};   // deg/ms
+        final AnimationTimer[] inertia   = {null};
+        final Timeline[]       resetAnim = {null};
+        sidebarLogoStack.setOnMousePressed(e -> {
+            if (inertia[0]   != null) { inertia[0].stop();   inertia[0]   = null; }
+            if (resetAnim[0] != null) { resetAnim[0].stop(); resetAnim[0] = null; }
+            pressScene[0]  = e.getSceneX();
+            pressScene[1]  = e.getSceneY();
+            prevScene[0]   = e.getSceneX();
+            prevScene[1]   = e.getSceneY();
+            prevTime[0]    = System.nanoTime();
+            angVelocity[0] = 0;
+            sidebarLogoStack.setCursor(javafx.scene.Cursor.CLOSED_HAND);
+            e.consume();
+        });
+
+        sidebarLogoStack.setOnMouseDragged(e -> {
+            long now = System.nanoTime();
+            double dt = (now - prevTime[0]) / 1_000_000.0;
+            double dx = e.getSceneX() - prevScene[0];
+            double dy = e.getSceneY() - prevScene[1];
+            prevScene[0] = e.getSceneX();
+            prevScene[1] = e.getSceneY();
+            prevTime[0]  = now;
+
+            // Cursor relative to disc centre in scene coords (correct regardless of node rotation)
+            javafx.geometry.Point2D centre = sidebarLogoStack.localToScene(
+                sidebarLogoStack.getWidth() / 2.0, sidebarLogoStack.getHeight() / 2.0);
+            double cx = e.getSceneX() - centre.getX();
+            double cy = e.getSceneY() - centre.getY();
+            double r2 = Math.max(cx * cx + cy * cy, 400); // min effective radius 20 px
+
+            // 2-D cross product → tangential drag drives rotation
+            double dRot = (cx * dy - cy * dx) / r2 * (180.0 / Math.PI);
+            if (dt > 0) angVelocity[0] = 0.6 * angVelocity[0] + 0.4 * (dRot / dt);
+            sidebarLogoStack.setRotate(sidebarLogoStack.getRotate() + dRot);
+            e.consume();
+        });
+
+        sidebarLogoStack.setOnMouseReleased(e -> {
+            sidebarLogoStack.setCursor(javafx.scene.Cursor.HAND);
+            double totalDx = e.getSceneX() - pressScene[0];
+            double totalDy = e.getSceneY() - pressScene[1];
+
+            if (Math.hypot(totalDx, totalDy) < 5.0) {
+                double cur = sidebarLogoStack.getRotate();
+                double mod = ((cur % 360) + 360) % 360;
+                double target = (mod <= 180) ? cur - mod : cur + (360 - mod);
+                resetAnim[0] = new Timeline(new KeyFrame(Duration.millis(520),
+                    new KeyValue(sidebarLogoStack.rotateProperty(), target, Interpolator.EASE_BOTH)
+                ));
+                resetAnim[0].play();
+            } else {
+                inertia[0] = new AnimationTimer() {
+                    private long lastNano = 0;
+                    @Override public void handle(long now) {
+                        if (lastNano == 0) { lastNano = now; return; }
+                        double dt = (now - lastNano) / 1_000_000.0;
+                        lastNano = now;
+                        if (dt <= 0 || dt > 100) return;
+                        angVelocity[0] *= Math.pow(0.96, dt / 16.67);
+                        if (Math.abs(angVelocity[0]) < 0.002) { stop(); inertia[0] = null; return; }
+                        sidebarLogoStack.setRotate(sidebarLogoStack.getRotate() + angVelocity[0] * dt);
+                    }
+                };
+                inertia[0].start();
+            }
+            e.consume();
+        });
     }
 
     /**

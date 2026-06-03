@@ -14,29 +14,25 @@ import javafx.util.Duration;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
-/**
- * Construye el panel de reproductor completo (vista expandida de una canción)
- * y asigna todas las referencias de UI a la {@link PlayerInstance} proporcionada.
- *
- * <p>El panel contiene:
- * <ul>
- *   <li>Miniatura 16:9 (320×180 px) con esquinas redondeadas.</li>
- *   <li>Canvas de forma de onda ({@code panelWaveCanvas}, 340×64 px) actualizado en tiempo
- *       real desde el {@code AudioSpectrumListener} del {@code MediaPlayer}.</li>
- *   <li>Controles de reproducción: anterior/siguiente (navegan entre pestañas), play/pausa,
- *       shuffle, repetición y volumen.</li>
- *   <li>Barra de progreso interactiva con seek mediante clic o arrastre del thumb.</li>
- * </ul>
- *
- * <p>Los botones prev/next están cableados a los callbacks {@code onPrev}/{@code onNext}
- * que en {@code MainController} invocan {@code navigateTab(-1/+1)}, no cambian de canción.
- * La visualización de onda se dibuja externamente mediante {@code MainController.drawWaveCanvas()}.
- * El contraste de texto del panel se aplica en {@code MainController} a través de
- * {@link ThemeManager#applyContrastStroke} tras añadir el panel al área de contenido.
- */
 public final class PlayerPanelBuilder {
 
     private PlayerPanelBuilder() {}
+
+    /**
+     * Canvas que participa en el sistema de layout de JavaFX.
+     * El StackPane puede redimensionarlo libremente; no añade restricciones
+     * de ancho/alto mínimos ni preferidos al contenedor padre.
+     */
+    private static final class ResizableCanvas extends Canvas {
+        @Override public boolean isResizable()          { return true; }
+        @Override public double minWidth(double h)      { return 0; }
+        @Override public double minHeight(double w)     { return 0; }
+        @Override public double maxWidth(double h)      { return Double.MAX_VALUE; }
+        @Override public double maxHeight(double w)     { return Double.MAX_VALUE; }
+        @Override public double prefWidth(double h)     { return 0; }
+        @Override public double prefHeight(double w)    { return 40; }
+        @Override public void resize(double w, double h){ setWidth(w); setHeight(h); }
+    }
 
     public static void build(PlayerInstance pi,
                              Consumer<PlayerInstance> onTogglePlay,
@@ -51,7 +47,7 @@ public final class PlayerPanelBuilder {
         panel.setPadding(new Insets(40, 80, 40, 80));
         panel.setVisible(false); panel.setManaged(false);
 
-        // ── Album art (square with rounded corners) ──────────────────────────
+        // ── Album art ────────────────────────────────────────────────────────
         ImageView artView = new ImageView();
         artView.setFitWidth(320); artView.setFitHeight(180); artView.setPreserveRatio(false);
         Rectangle artClip = new Rectangle(320, 180);
@@ -64,6 +60,7 @@ public final class PlayerPanelBuilder {
 
         // ── Waveform canvas ──────────────────────────────────────────────────
         Canvas waveCanvas = new Canvas(340, 64);
+        waveCanvas.getStyleClass().add("wave-canvas");
 
         // ── Song info ────────────────────────────────────────────────────────
         Label panelTitle  = new Label("Selecciona una canción");
@@ -71,11 +68,18 @@ public final class PlayerPanelBuilder {
         Label panelArtist = new Label("–");
         panelArtist.getStyleClass().add("player-full-artist");
 
-        // ── Progress ─────────────────────────────────────────────────────────
-        Label panelElapsed = new Label("0:00"); panelElapsed.getStyleClass().add("time-label");
-        Label panelTotal   = new Label("0:00"); panelTotal.getStyleClass().add("time-label");
+        // ── Progress row ─────────────────────────────────────────────────────
+        Label panelElapsed = new Label("0:00");
+        panelElapsed.getStyleClass().add("time-label");
+        panelElapsed.setMinWidth(Region.USE_PREF_SIZE); // never get squeezed by the slider
+
+        Label panelTotal = new Label("0:00");
+        panelTotal.getStyleClass().add("time-label");
+        panelTotal.setMinWidth(Region.USE_PREF_SIZE);
+
         Slider panelProgress = new Slider(0, 100, 0);
-        panelProgress.getStyleClass().add("progress-slider"); panelProgress.setPrefWidth(520);
+        panelProgress.getStyleClass().add("progress-slider");
+        panelProgress.setMaxWidth(Double.MAX_VALUE); // allow filling the StackPane
         panelProgress.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
             Node t = (Node) e.getTarget();
             if (t.getStyleClass().contains("thumb") || t.getStyleClass().contains("track")) {
@@ -99,11 +103,25 @@ public final class PlayerPanelBuilder {
             if (total != null && total.greaterThan(Duration.ZERO))
                 panelElapsed.setText(UIUtils.formatTime((int)(val.doubleValue() / 100.0 * total.toSeconds())));
         });
-        HBox timeRow = new HBox(14, panelElapsed, panelProgress, panelTotal);
+
+        // ── Spectrogram overlay canvas (resizable, lives behind the slider) ──
+        ResizableCanvas spectroCanvas = new ResizableCanvas();
+        spectroCanvas.getStyleClass().add("wave-canvas");
+        spectroCanvas.setMouseTransparent(true);
+        spectroCanvas.setVisible(false);
+
+        // StackPane sizes the canvas automatically; no fixed-width binding needed
+        StackPane progressStack = new StackPane(spectroCanvas, panelProgress);
+        progressStack.setMinHeight(40);
+        progressStack.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(progressStack, Priority.ALWAYS);
+
+        HBox timeRow = new HBox(14, panelElapsed, progressStack, panelTotal);
         timeRow.setAlignment(Pos.CENTER);
+        timeRow.setMaxWidth(Double.MAX_VALUE);
 
         // ── Controls ─────────────────────────────────────────────────────────
-        Button ppShuffle = new Button("⇄"); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
+        Button ppShuffle = new Button("≋"); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
         Button ppPrev    = new Button("⏮"); ppPrev.getStyleClass().add("control-btn");    ppPrev.setOnAction(e -> onPrev.accept(pi));
         Button ppPlay    = new Button("▶");  ppPlay.getStyleClass().add("play-btn");
         ppPlay.setStyle("-fx-min-width:64px;-fx-min-height:64px;-fx-font-size:22px;");
@@ -141,5 +159,7 @@ public final class PlayerPanelBuilder {
         pi.panelTitle = panelTitle; pi.panelArtist = panelArtist;
         pi.panelProgress = panelProgress; pi.panelElapsed = panelElapsed; pi.panelTotal = panelTotal;
         pi.panelPlayPause = ppPlay; pi.panelRepeat = ppRepeat; pi.panelVolumeSlider = volSlider;
+        pi.panelSpectroCanvas = spectroCanvas;
+        pi.panelShuffleBtn = ppShuffle;
     }
 }

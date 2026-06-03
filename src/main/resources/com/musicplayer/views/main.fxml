@@ -8,10 +8,12 @@
 <?import javafx.scene.text.*?>
 <?import javafx.geometry.*?>
 
-<BorderPane xmlns="http://javafx.com/javafx/21"
-            xmlns:fx="http://javafx.com/fxml/1"
-            fx:controller="com.musicplayer.controllers.MainController"
-            styleClass="root-pane">
+<StackPane fx:id="mainRootPane"
+           xmlns="http://javafx.com/javafx/21"
+           xmlns:fx="http://javafx.com/fxml/1"
+           fx:controller="com.musicplayer.controllers.MainController">
+
+<BorderPane styleClass="root-pane">
 
     <!-- ═══════════════════ TOP BAR ═══════════════════ -->
     <top>
@@ -143,7 +145,7 @@
                   style="-fx-padding: 0 0 0 12;">
                 <StackPane fx:id="vinylContainer" styleClass="vinyl-container">
                     <ImageView fx:id="albumArt" fitWidth="78" fitHeight="44" styleClass="album-art" />
-                    <Canvas fx:id="miniWaveCanvas" width="78" height="44" />
+                    <Canvas fx:id="miniWaveCanvas" width="78" height="44" styleClass="wave-canvas" />
                 </StackPane>
                 <VBox spacing="2" alignment="CENTER_LEFT" HBox.hgrow="ALWAYS">
                     <Label fx:id="nowPlayingTitle"  text="Selecciona una canción"
@@ -172,7 +174,7 @@
             <!-- Secondary controls + volume -->
             <HBox spacing="6" alignment="CENTER_RIGHT" prefWidth="240" minWidth="200"
                   style="-fx-padding: 0 20 0 0;">
-                <Button fx:id="btnShuffle" text="⇄" styleClass="control-btn" />
+                <Button fx:id="btnShuffle" text="≋" styleClass="control-btn" />
                 <Button fx:id="btnRepeat"  text="↺" styleClass="control-btn" />
                 <Button text="⇆" styleClass="control-btn" onAction="#onSwitchFocusedPlayer" />
                 <Slider fx:id="volumeSlider" styleClass="volume-slider"
@@ -184,3 +186,5 @@
     </bottom>
 
 </BorderPane>
+
+</StackPane>

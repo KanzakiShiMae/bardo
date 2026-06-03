@@ -274,7 +274,9 @@ public class ThemeManager {
                 Image img = new Image(thumbUrl, 128, 128, false, true);
                 List<Color> colors = img.isError() ? List.of() : extractDominantColors(img, 2);
                 Platform.runLater(() -> {
-                    if (focusedPlayerSupplier.get() != captured) return;
+                    PlayerInstance curr = focusedPlayerSupplier.get();
+                    if (curr != captured) return;
+                    if (!curr.isPlaying) { fadeAllToBase(); return; }
                     if (colors.isEmpty()) { fadeAllToBase(); return; }
                     applyDynamicColors(colors);
                 });
