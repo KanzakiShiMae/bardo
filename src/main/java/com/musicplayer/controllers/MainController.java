@@ -895,7 +895,7 @@ public class MainController implements Initializable {
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
 
             // ── Audio spectrum → forma de onda en tiempo real ────────────────
-            final int BANDS = 32;
+            final int BANDS = 64;
             pi.waveSmoothed = new float[BANDS];
             pi.wavePeaks    = new float[BANDS];
             final float[] smoothed = pi.waveSmoothed;
@@ -904,7 +904,11 @@ public class MainController implements Initializable {
             pi.mediaPlayer.setAudioSpectrumInterval(1.0 / 30);
             pi.mediaPlayer.setAudioSpectrumListener((ts, dur2, mags, phases) -> {
                 for (int i = 0; i < BANDS; i++) {
-                    float target = Math.max(0f, (mags[i] + 60f) / 60f);
+                    float raw   = Math.max(0f, (mags[i] + 60f) / 60f);
+                    // Los agudos tienen menos energía por naturaleza; boost progresivo
+                    // para que todo el wave reaccione: 1x para graves, 3x para agudos
+                    float boost  = 1.0f + (float) i / (BANDS - 1) * 2.0f;
+                    float target = Math.min(1.0f, raw * boost);
                     smoothed[i] = smoothed[i] * 0.55f + target * 0.45f;
                 }
                 if (!pending[0]) {
@@ -1080,13 +1084,7 @@ public class MainController implements Initializable {
         if (smoothed == null || peaks == null) return;
 
         boolean isMini = (w <= 100);
-        double gap  = isMini ? 1.0 : 1.5;
-        double barW = isMini ? 2.5 : 4.0;
-        int    n    = smoothed.length;
-        int displayBars = Math.max(2, (int)((w + gap) / (barW + gap)));
-        if (displayBars % 2 != 0) displayBars--;
-        barW = (w - gap * (displayBars - 1)) / displayBars;
-        int half = displayBars / 2;
+        int n = smoothed.length;
 
         String hexA  = themeManager.currentTheme.get("bardo-accent");
         String hexA2 = themeManager.currentTheme.get("bardo-accent2");
@@ -1099,55 +1097,86 @@ public class MainController implements Initializable {
         }
 
         double centerY = h / 2.0;
+        double maxH    = centerY * 0.88;
+        double minH    = isMini ? 1.5 : 2.0;
 
-        for (int i = 0; i < displayBars; i++) {
-            int    dist = (i < half) ? (half - 1 - i) : (i - half);
-            double t    = (half > 1) ? (double) dist / (half - 1) : 0.0;
-
-            double bandF  = t * (n - 1);
-            int    bLow   = (int) bandF;
-            int    bHigh  = Math.min(bLow + 1, n - 1);
-            float  frac   = (float)(bandF - bLow);
-            float  energy = smoothed[bLow] * (1 - frac) + smoothed[bHigh] * frac;
-
-            int pkIdx = Math.max(0, Math.min(n - 1, bLow));
-            if (energy > peaks[pkIdx]) peaks[pkIdx] = energy;
-            else peaks[pkIdx] = Math.max(0f, peaks[pkIdx] - 0.011f);
-            float peakEnergy = peaks[pkIdx];
-
-            double halfH     = Math.max(isMini ? 1.5 : 2.0, energy     * centerY * 0.92);
-            double peakHalfH = Math.max(halfH,               peakEnergy * centerY * 0.92);
-            double x = i * (barW + gap);
-
-            double r = lerp(ca.getRed(),   ca2.getRed(),   t);
-            double g = lerp(ca.getGreen(), ca2.getGreen(), t);
-            double b = lerp(ca.getBlue(),  ca2.getBlue(),  t);
-
-            // Soft glow halo (main canvas only)
-            if (!isMini) {
-                gc.setFill(Color.color(r, g, b, 0.10));
-                gc.fillRoundRect(x - 3, centerY - halfH - 2, barW + 6, halfH * 2 + 4, 6, 6);
-            }
-
-            // Top half — bright at tip, fades to center
-            gc.setFill(new LinearGradient(0, centerY - halfH, 0, centerY, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.color(r, g, b, isMini ? 0.92 : 0.95)),
-                new Stop(1, Color.color(r, g, b, 0.20))));
-            gc.fillRoundRect(x, centerY - halfH, barW, halfH, 2, 2);
-
-            // Bottom half — mirror
-            gc.setFill(new LinearGradient(0, centerY, 0, centerY + halfH, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.color(r, g, b, 0.20)),
-                new Stop(1, Color.color(r, g, b, isMini ? 0.92 : 0.95))));
-            gc.fillRoundRect(x, centerY, barW, halfH, 2, 2);
-
-            // Peak caps (main canvas only)
-            if (!isMini && peakHalfH > halfH + 2) {
-                gc.setFill(Color.color(r, g, b, 0.85));
-                gc.fillRect(x, centerY - peakHalfH - 2.5, barW, 2.5);
-                gc.fillRect(x, centerY + peakHalfH,       barW, 2.5);
-            }
+        // Layout espejo: graves en el centro, agudos en los extremos (simétrico)
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        for (int i = 0; i < n; i++) {
+            double tPos  = (double) i / (n - 1);        // 0.0 → 1.0 (izq → der)
+            double tBand = 2.0 * Math.abs(tPos - 0.5);  // 0.0 en centro → 1.0 en extremos
+            xs[i] = tPos * (w - 1.0);
+            double bandF = tBand * (n - 1);
+            int    bLow  = Math.max(0, Math.min(n - 2, (int) bandF));
+            float  frac  = (float)(bandF - bLow);
+            float  val   = smoothed[bLow] * (1 - frac) + smoothed[bLow + 1] * frac;
+            ys[i] = centerY - Math.max(minH, val * maxH);
         }
+
+        double fillAlpha = isMini ? 0.45 : 0.28;
+        double lineAlpha = isMini ? 0.85 : 0.92;
+        double lineWidth = isMini ? 1.5 : 2.0;
+
+        LinearGradient fillGrad = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), fillAlpha)),
+            new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), fillAlpha)));
+        LinearGradient lineGrad = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
+            new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), lineAlpha)),
+            new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), lineAlpha)));
+
+        // Relleno superior (entre curva y línea central)
+        gc.setFill(fillGrad);
+        gc.beginPath();
+        gc.moveTo(xs[0], centerY);
+        gc.lineTo(xs[0], ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], ys[n - 1]);
+        gc.lineTo(xs[n - 1], centerY);
+        gc.closePath();
+        gc.fill();
+
+        // Relleno inferior (espejo)
+        gc.beginPath();
+        gc.moveTo(xs[0], centerY);
+        gc.lineTo(xs[0], h - ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = h - (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], h - ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], h - ys[n - 1]);
+        gc.lineTo(xs[n - 1], centerY);
+        gc.closePath();
+        gc.fill();
+
+        // Línea brillante superior
+        gc.setStroke(lineGrad);
+        gc.setLineWidth(lineWidth);
+        gc.beginPath();
+        gc.moveTo(xs[0], ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], ys[n - 1]);
+        gc.stroke();
+
+        // Línea brillante inferior (espejo)
+        gc.beginPath();
+        gc.moveTo(xs[0], h - ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = h - (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], h - ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], h - ys[n - 1]);
+        gc.stroke();
     }
 
     private static double lerp(double a, double b, double t) { return a + t * (b - a); }
