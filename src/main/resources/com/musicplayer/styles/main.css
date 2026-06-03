@@ -1021,3 +1021,35 @@
     -fx-background-radius: 4px;
     -fx-background-insets: 0;
 }
+
+/* ── Quota progress bar (home panel) ──────────────────────────────────────── */
+.quota-progress-bar {
+    -fx-pref-height: 6px;
+    -fx-background-radius: 3px;
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+}
+.quota-progress-bar .track {
+    -fx-background-color: derive(bardo-sidebar-bg, -8%);
+    -fx-background-radius: 3px;
+}
+.quota-progress-bar .bar {
+    -fx-background-color: linear-gradient(to right, #9dc4e8, #b8d8a8);
+    -fx-background-radius: 3px;
+    -fx-background-insets: 0;
+}
+.quota-progress-bar.quota-bar-warning .bar {
+    -fx-background-color: linear-gradient(to right, #f4d07a, #f4a855);
+}
+.quota-progress-bar.quota-bar-critical .bar {
+    -fx-background-color: linear-gradient(to right, #f4a7b9, #e07070);
+}
+.quota-info-label {
+    -fx-text-fill: derive(bardo-text-muted, 10%);
+    -fx-font-size: 11px;
+}
+.quota-countdown-label {
+    -fx-text-fill: derive(bardo-accent, -10%);
+    -fx-font-size: 11px;
+    -fx-font-style: italic;
+}

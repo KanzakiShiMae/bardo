@@ -10,6 +10,7 @@ import javafx.collections.ObservableList;
 import javafx.geometry.*;
 import javafx.scene.Cursor;
 import javafx.scene.control.*;
+import javafx.scene.input.MouseButton;
 import javafx.scene.image.*;
 import javafx.scene.layout.*;
 import javafx.util.Duration;
@@ -94,7 +95,8 @@ public final class GroupDetailBuilder {
                                    BiConsumer<Song, LibraryGroup> onPlaySong,
                                    BiConsumer<Song, LibraryGroup> onOpenPaused,
                                    Consumer<List<Song>> onOpenMashup,
-                                   LibraryService libraryService, Consumer<String> onToast) {
+                                   LibraryService libraryService, Consumer<String> onToast,
+                                   Runnable onPinChanged) {
         VBox panel = new VBox(0); panel.getStyleClass().add("panel"); panel.setPadding(Insets.EMPTY);
 
         // Top bar
@@ -197,13 +199,13 @@ public final class GroupDetailBuilder {
                             mashupPlayBtn[0].setDisable(mashupSel[0] == null || mashupSel[1] == null);
                             songList.refresh();
                         }, moved -> Platform.runLater(() -> songList.scrollTo(filteredSongs.indexOf(moved))),
-                        libraryService, onToast));
+                        libraryService, onToast, onPinChanged));
                     } else {
                         setGraphic(detailSongRow(song, group, onBrowser,
                             () -> { if (!justDragged[0]) onPlaySong.accept(song, group); justDragged[0] = false; },
                             () -> onOpenPaused.accept(song, group),
                             moved -> Platform.runLater(() -> songList.scrollTo(filteredSongs.indexOf(moved))),
-                            libraryService, onToast));
+                            libraryService, onToast, onPinChanged));
                     }
                 }
             };
@@ -274,7 +276,8 @@ public final class GroupDetailBuilder {
     private static HBox detailSongRow(Song song, LibraryGroup group,
                                       Consumer<String> onBrowser, Runnable onPlay,
                                       Runnable onOpenPaused, Consumer<Song> onMoved,
-                                      LibraryService libraryService, Consumer<String> onToast) {
+                                      LibraryService libraryService, Consumer<String> onToast,
+                                      Runnable onPinChanged) {
         HBox row = new HBox(12); row.getStyleClass().add("detail-song-row");
         row.setAlignment(Pos.CENTER_LEFT); row.setPadding(new Insets(0, 16, 0, 16));
 
@@ -338,6 +341,7 @@ public final class GroupDetailBuilder {
                 pinned[0] = true; pinBtn.setText("📌");
                 pinBtn.getStyleClass().add("row-pin-btn-active");
             }
+            onPinChanged.run();
         });
         row.getChildren().add(pinBtn);
 
@@ -358,7 +362,11 @@ public final class GroupDetailBuilder {
         removeBtn.setOnAction(e -> group.removeSong(song));
         row.getChildren().addAll(moveBox, removeBtn);
 
-        row.setOnMouseClicked(e -> { if (!(e.getTarget() instanceof Button)) onPlay.run(); });
+        row.setOnMouseClicked(e -> {
+            if (e.getTarget() instanceof Button) return;
+            if (e.getButton() == MouseButton.MIDDLE) { onOpenPaused.run(); return; }
+            onPlay.run();
+        });
         return row;
     }
 
@@ -367,7 +375,8 @@ public final class GroupDetailBuilder {
     private static HBox detailSongRowMashup(Song song, LibraryGroup group,
                                             String selBadge, Consumer<String> onBrowser,
                                             Runnable onSelect, Consumer<Song> onMoved,
-                                            LibraryService libraryService, Consumer<String> onToast) {
+                                            LibraryService libraryService, Consumer<String> onToast,
+                                            Runnable onPinChanged) {
         HBox row = new HBox(12); row.getStyleClass().add("detail-song-row");
         row.setAlignment(Pos.CENTER_LEFT); row.setPadding(new Insets(0, 16, 0, 16));
         if (selBadge != null)
@@ -430,6 +439,7 @@ public final class GroupDetailBuilder {
                 pinnedM[0] = true; pinBtnM.setText("📌");
                 pinBtnM.getStyleClass().add("row-pin-btn-active");
             }
+            onPinChanged.run();
         });
         row.getChildren().add(pinBtnM);
 

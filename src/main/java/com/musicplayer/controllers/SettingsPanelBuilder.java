@@ -2,6 +2,7 @@ package com.musicplayer.controllers;
 
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.YouTubeQuotaTracker;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -49,6 +50,7 @@ public final class SettingsPanelBuilder {
     public static void build(VBox settingsPanel,
                              ThemeManager themeManager,
                              LibraryService libraryService,
+                             YouTubeQuotaTracker quotaTracker,
                              DoubleConsumer onAmbientDuckChange) {
         int savedPct = libraryService.loadAmbientDuck();
 
@@ -145,6 +147,75 @@ public final class SettingsPanelBuilder {
         apiRow.setAlignment(Pos.CENTER_LEFT);
         Separator settingsSep = new Separator(); settingsSep.setPadding(new Insets(8, 0, 8, 0));
         VBox apiSection = new VBox(8, apiSectionLbl, apiDescLbl, apiRow, apiStatusLbl);
+
+        // ── Cuota de YouTube API ──────────────────────────────────────────────
+        Label quotaSectionLbl = new Label("CUOTA DE YOUTUBE API");
+        quotaSectionLbl.getStyleClass().add("sidebar-section-label");
+
+        VBox quotaSection;
+        if (quotaTracker.isEnforced()) {
+            Label enforcedLbl = new Label(
+                "🔒  Límite activo — API de desarrollo (no se puede desactivar)");
+            enforcedLbl.getStyleClass().add("greeting-sub");
+            Label enforcedMax = new Label(
+                "Límite diario: " + YouTubeQuotaTracker.ENFORCED_MAX + " unidades");
+            enforcedMax.getStyleClass().add("greeting-sub");
+            quotaSection = new VBox(6, quotaSectionLbl, enforcedLbl, enforcedMax);
+        } else {
+            Label quotaDesc = new Label(
+                "Registra el uso estimado de la API para evitar superar el límite diario de Google.");
+            quotaDesc.setWrapText(true);
+            quotaDesc.getStyleClass().add("greeting-sub");
+
+            CheckBox enabledCheck = new CheckBox("Limitar cuota diaria");
+            enabledCheck.setSelected(quotaTracker.isEnabled());
+            enabledCheck.getStyleClass().add("greeting-sub");
+
+            Label limitLbl = new Label("Límite diario:");
+            limitLbl.getStyleClass().add("greeting-sub");
+            TextField limitField = new TextField(String.valueOf(quotaTracker.getDailyMax()));
+            limitField.setPrefWidth(90);
+            limitField.getStyleClass().add("detail-search-field");
+            limitField.setDisable(!quotaTracker.isEnabled());
+            Label unitLbl = new Label("unidades");
+            unitLbl.getStyleClass().add("greeting-sub");
+
+            Button saveQuotaBtn = new Button("💾  Guardar");
+            saveQuotaBtn.getStyleClass().add("btn-primary");
+            saveQuotaBtn.setDisable(!quotaTracker.isEnabled());
+
+            Label quotaStatusLbl = new Label("");
+            quotaStatusLbl.getStyleClass().add("greeting-sub");
+
+            enabledCheck.setOnAction(e -> {
+                boolean on = enabledCheck.isSelected();
+                quotaTracker.setEnabled(on);
+                limitField.setDisable(!on);
+                saveQuotaBtn.setDisable(!on);
+            });
+
+            saveQuotaBtn.setOnAction(e -> {
+                try {
+                    int val = Integer.parseInt(limitField.getText().strip());
+                    quotaTracker.setDailyMax(val);
+                    limitField.setText(String.valueOf(quotaTracker.getDailyMax())); // shows clamped value
+                    quotaStatusLbl.setText("✓ Guardado");
+                    quotaStatusLbl.setStyle("-fx-text-fill: #27ae60;");
+                    PauseTransition clear = new PauseTransition(Duration.seconds(2));
+                    clear.setOnFinished(ev -> quotaStatusLbl.setText(""));
+                    clear.play();
+                } catch (NumberFormatException ex) {
+                    quotaStatusLbl.setText("⚠ Introduce un número entero.");
+                    quotaStatusLbl.setStyle("-fx-text-fill: #c0392b;");
+                }
+            });
+
+            HBox limitRow = new HBox(8, limitLbl, limitField, unitLbl, saveQuotaBtn);
+            limitRow.setAlignment(Pos.CENTER_LEFT);
+            quotaSection = new VBox(8, quotaSectionLbl, quotaDesc, enabledCheck, limitRow, quotaStatusLbl);
+        }
+
+        Separator quotaSep = new Separator(); quotaSep.setPadding(new Insets(8, 0, 8, 0));
 
         // ── Apariencia ────────────────────────────────────────────────────────
         Label appearanceSectionLbl = new Label("APARIENCIA");
@@ -268,7 +339,7 @@ public final class SettingsPanelBuilder {
         Separator appearanceSep = new Separator(); appearanceSep.setPadding(new Insets(8, 0, 8, 0));
 
         VBox scrollContent = new VBox(24, header, section, settingsSep, apiSection,
-            appearanceSep, appearanceSection);
+            quotaSep, quotaSection, appearanceSep, appearanceSection);
         scrollContent.setPadding(new Insets(28, 28, 28, 28));
 
         ScrollPane settingsScroll = new ScrollPane(scrollContent);

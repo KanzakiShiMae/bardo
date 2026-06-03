@@ -47,9 +47,11 @@ public class YouTubeService {
     private static final String BASE_URL = "https://www.googleapis.com/youtube/v3";
     private final String apiKey;
     private final OkHttpClient http;
+    private final YouTubeQuotaTracker quotaTracker;
 
-    public YouTubeService(String apiKey) {
-        this.apiKey = apiKey;
+    public YouTubeService(String apiKey, YouTubeQuotaTracker quotaTracker) {
+        this.apiKey        = apiKey;
+        this.quotaTracker  = quotaTracker;
         this.http = new OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
@@ -60,6 +62,7 @@ public class YouTubeService {
 
     public CompletableFuture<ObservableList<Song>> search(String query, int maxResults) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             String url = BASE_URL + "/search"
                 + "?part=snippet"
                 + "&type=video"
@@ -67,6 +70,7 @@ public class YouTubeService {
                 + "&q=" + encode(query)
                 + "&maxResults=" + maxResults
                 + "&key=" + apiKey;
+            quotaTracker.record(YouTubeQuotaTracker.COST_SEARCH);
             return fetch(url, this::parseVideoSearchResults);
         });
     }
@@ -75,6 +79,7 @@ public class YouTubeService {
 
     public CompletableFuture<ObservableList<YouTubePlaylistInfo>> searchPlaylists(String query, int maxResults) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             String url = BASE_URL + "/search"
                 + "?part=snippet"
                 + "&type=playlist"
@@ -82,6 +87,7 @@ public class YouTubeService {
                 + "&maxResults=" + maxResults
                 + "&key=" + apiKey;
 
+            quotaTracker.record(YouTubeQuotaTracker.COST_SEARCH);
             String body = rawGet(url);
             List<YouTubePlaylistInfo> playlists = parsePlaylistSearchResults(body);
 
@@ -96,6 +102,7 @@ public class YouTubeService {
                     + "&key=" + apiKey;
 
                 try {
+                    quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
                     String countBody = rawGet(countUrl);
                     Map<String, Integer> counts = parseItemCounts(countBody);
                     playlists.forEach(p -> {
@@ -113,6 +120,7 @@ public class YouTubeService {
 
     public CompletableFuture<ObservableList<Song>> getPlaylistItems(String playlistId) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             ObservableList<Song> all = FXCollections.observableArrayList();
             String pageToken = null;
 
@@ -124,6 +132,7 @@ public class YouTubeService {
                     + "&key=" + apiKey
                     + (pageToken != null ? "&pageToken=" + pageToken : "");
 
+                quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
                 String body = rawGet(url);
                 JsonObject root = JsonParser.parseString(body).getAsJsonObject();
                 all.addAll(parsePlaylistItems(root.toString()));
@@ -225,10 +234,12 @@ public class YouTubeService {
 
     public CompletableFuture<Song> getVideoById(String videoId) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return null;
             String url = BASE_URL + "/videos"
                 + "?part=snippet,contentDetails"
                 + "&id=" + videoId
                 + "&key=" + apiKey;
+            quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
             String body = rawGet(url);
             JsonObject root  = JsonParser.parseString(body).getAsJsonObject();
             JsonArray  items = root.getAsJsonArray("items");
@@ -246,10 +257,12 @@ public class YouTubeService {
 
     public CompletableFuture<YouTubePlaylistInfo> getPlaylistById(String playlistId) {
         return CompletableFuture.supplyAsync(() -> {
+            if (quotaTracker.isExhausted()) return null;
             String url = BASE_URL + "/playlists"
                 + "?part=snippet,contentDetails"
                 + "&id=" + playlistId
                 + "&key=" + apiKey;
+            quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
             String body  = rawGet(url);
             JsonObject root  = JsonParser.parseString(body).getAsJsonObject();
             JsonArray  items = root.getAsJsonArray("items");

@@ -7,6 +7,7 @@ import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.DownloadService;
 import com.musicplayer.services.LibraryService;
 import com.musicplayer.services.SpectrogramService;
+import com.musicplayer.services.YouTubeQuotaTracker;
 import com.musicplayer.services.YouTubeService;
 import javafx.animation.*;
 import javafx.application.Platform;
@@ -147,6 +148,7 @@ public class MainController implements Initializable {
     private SequentialTransition toastAnim;
 
     private YouTubeService      youTubeService;
+    private YouTubeQuotaTracker quotaTracker;
     private LibraryService      libraryService;
     private DownloadService     downloadService;
     private SpectrogramService  spectrogramService;
@@ -188,8 +190,12 @@ public class MainController implements Initializable {
         themeManager.loadFromPersistence();
         String apiKey   = libraryService.loadYouTubeApiKey();
         if (apiKey == null || apiKey.isBlank()) apiKey = ConfigLoader.get("youtube.api.key");
-        youTubeService  = new YouTubeService(apiKey);
+        quotaTracker    = new YouTubeQuotaTracker(apiKey);
+        youTubeService  = new YouTubeService(apiKey, quotaTracker);
         downloadService = new DownloadService();
+        quotaTracker.exhaustedProperty().addListener((obs, wasEx, isEx) -> {
+            if (isEx) showToast("Cuota de YouTube API agotada. La búsqueda se reanudará a medianoche (hora del Pacífico).");
+        });
 
         URL iconUrl   = getClass().getResource("/com/musicplayer/icons/icon.png");
         URL filterUrl = getClass().getResource("/com/musicplayer/icons/icon_filter.png");
@@ -225,7 +231,7 @@ public class MainController implements Initializable {
         setupVolumeSlider();
         volumeSlider.setValue(libraryService.loadVolume());
         setupSidebarNavigation();
-        SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService,
+        SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService, quotaTracker,
             pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); });
         ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
         applyCircularClip();
@@ -705,7 +711,39 @@ public class MainController implements Initializable {
     }
 
     private void openSongPaused(Song song, LibraryGroup group) {
-        if (!song.isLocal()) { showToast("Descarga la canción primero"); return; }
+        if (song.isLocal()) {
+            doOpenSongPaused(song, group);
+            return;
+        }
+        // Not downloaded: download first, then open paused
+        final LibraryGroup target = group != null ? group : libraryService.getOrCreateHistorial();
+        if (group == null) target.addSong(song);
+
+        String vid = song.getVideoId();
+        if (downloadingNow.contains(vid)) { showToast("Ya se está descargando «" + song.getTitle() + "»"); return; }
+        downloadingNow.add(vid);
+        nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
+        nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
+
+        downloadService.downloadAudio(song, target.getId())
+            .thenAccept(path -> Platform.runLater(() -> {
+                downloadingNow.remove(vid);
+                song.setLocalFilePath(path.toString());
+                spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
+                libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
+                doOpenSongPaused(song, group);
+            }))
+            .exceptionally(ex -> {
+                Platform.runLater(() -> {
+                    downloadingNow.remove(vid);
+                    showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
+                    updateMiniPlayerVisibility();
+                });
+                return null;
+            });
+    }
+
+    private void doOpenSongPaused(Song song, LibraryGroup group) {
         List<Song> q = group != null
             ? group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList())
             : List.of(song);
@@ -726,7 +764,6 @@ public class MainController implements Initializable {
             if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
         }
 
-        // Stay on the previous view
         if (prevTab != null) activateTab(prevTab);
         if (prevFocused != null) setFocusedPlayer(prevFocused);
         rebuildTabBar();
@@ -1173,7 +1210,7 @@ public class MainController implements Initializable {
         Arrays.fill(miniWavePeaks, 0f);
         drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
         updatePlayPauseButton(); updateLoopButtons();
-        themeManager.updateDynamicColors();
+        if (pi.isPlaying) themeManager.updateDynamicColors();
     }
 
     @FXML private void onSwitchFocusedPlayer() {
@@ -1415,7 +1452,7 @@ public class MainController implements Initializable {
             (song, grp) -> downloadAndPlay(song, grp),
             (song, grp) -> openSongPaused(song, grp),
             songs -> openMashupPlayer(songs.get(0), songs.get(1)),
-            libraryService, this::showToast);
+            libraryService, this::showToast, this::refreshHomePanel);
         openTab(tabId, group.isYoutubePlaylist() ? "📺" : "📋", group.getName(), panel, true, btnLibrary);
         themeManager.applyContrastStroke(panel, "bardo-text", "bardo-bg");
     }
@@ -1612,38 +1649,79 @@ public class MainController implements Initializable {
             hint.getStyleClass().add("empty-library-hint");
             VBox.setVgrow(hint, Priority.ALWAYS);
             homePanel.getChildren().add(hint);
-            return;
+        } else {
+            ScrollPane scroll = new ScrollPane();
+            scroll.setFitToWidth(true);
+            scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+            scroll.getStyleClass().add("results-scroll");
+            VBox.setVgrow(scroll, Priority.ALWAYS);
+
+            VBox sections = new VBox(24);
+            sections.setPadding(new javafx.geometry.Insets(4, 0, 12, 0));
+
+            if (!pinned.isEmpty()) {
+                Label sectionLbl = new Label("CANCIONES PINEADAS");
+                sectionLbl.getStyleClass().add("sidebar-section-label");
+                javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
+                pinnedFlow.setAlignment(Pos.TOP_LEFT);
+                pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
+                sections.getChildren().addAll(sectionLbl, pinnedFlow);
+            }
+
+            if (!top.isEmpty()) {
+                Label sectionLbl = new Label("COLECCIONES MÁS ESCUCHADAS");
+                sectionLbl.getStyleClass().add("sidebar-section-label");
+                HBox topRow = new HBox(20);
+                topRow.setAlignment(Pos.CENTER_LEFT);
+                top.forEach(g -> topRow.getChildren().add(buildTopPlaylistCard(g)));
+                sections.getChildren().addAll(sectionLbl, topRow);
+            }
+
+            scroll.setContent(sections);
+            homePanel.getChildren().add(scroll);
         }
 
-        ScrollPane scroll = new ScrollPane();
-        scroll.setFitToWidth(true);
-        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        scroll.getStyleClass().add("results-scroll");
-        VBox.setVgrow(scroll, Priority.ALWAYS);
+        if (quotaTracker.isEnabled()) homePanel.getChildren().add(buildQuotaWidget());
+    }
 
-        VBox sections = new VBox(24);
-        sections.setPadding(new javafx.geometry.Insets(4, 0, 12, 0));
+    private VBox buildQuotaWidget() {
+        int max  = quotaTracker.getDailyMax();
+        int used = quotaTracker.getUsedToday();
 
-        if (!pinned.isEmpty()) {
-            Label sectionLbl = new Label("CANCIONES PINEADAS");
-            sectionLbl.getStyleClass().add("sidebar-section-label");
-            javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
-            pinnedFlow.setAlignment(Pos.TOP_LEFT);
-            pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
-            sections.getChildren().addAll(sectionLbl, pinnedFlow);
-        }
+        Label title = new Label("CUOTA YOUTUBE API (HOY)");
+        title.getStyleClass().add("sidebar-section-label");
 
-        if (!top.isEmpty()) {
-            Label sectionLbl = new Label("COLECCIONES MÁS ESCUCHADAS");
-            sectionLbl.getStyleClass().add("sidebar-section-label");
-            HBox topRow = new HBox(20);
-            topRow.setAlignment(Pos.CENTER_LEFT);
-            top.forEach(g -> topRow.getChildren().add(buildTopPlaylistCard(g)));
-            sections.getChildren().addAll(sectionLbl, topRow);
-        }
+        ProgressBar bar = new ProgressBar();
+        bar.progressProperty().bind(quotaTracker.usedTodayProperty().divide((double) max));
+        bar.setMaxWidth(Double.MAX_VALUE);
+        bar.getStyleClass().add("quota-progress-bar");
+        if (quotaTracker.isExhausted() || used >= max * 0.8) bar.getStyleClass().add("quota-bar-critical");
+        else if (used >= max * 0.5)                          bar.getStyleClass().add("quota-bar-warning");
 
-        scroll.setContent(sections);
-        homePanel.getChildren().add(scroll);
+        Label usedLbl = new Label();
+        usedLbl.textProperty().bind(
+            quotaTracker.usedTodayProperty().asString().concat(" / " + max + " unidades"));
+        usedLbl.getStyleClass().add("quota-info-label");
+
+        // Countdown: always present; visible only when quota exhausted
+        Label countdownLbl = new Label();
+        countdownLbl.getStyleClass().add("quota-countdown-label");
+        countdownLbl.visibleProperty().bind(quotaTracker.exhaustedProperty());
+        countdownLbl.managedProperty().bind(quotaTracker.exhaustedProperty());
+        Runnable tick = () ->
+            countdownLbl.setText("· reinicia en " + quotaTracker.getTimeUntilResetString());
+        tick.run();
+        Timeline timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> tick.run()));
+        timer.setCycleCount(Animation.INDEFINITE);
+        timer.play();
+        homeCarouselTimelines.add(timer);
+
+        HBox infoRow = new HBox(10, usedLbl, countdownLbl);
+        infoRow.setAlignment(Pos.CENTER_LEFT);
+
+        VBox box = new VBox(6, title, bar, infoRow);
+        box.setPadding(new javafx.geometry.Insets(12, 0, 4, 0));
+        return box;
     }
 
     private VBox buildTopPlaylistCard(LibraryGroup group) {
