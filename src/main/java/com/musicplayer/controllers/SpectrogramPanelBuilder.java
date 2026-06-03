@@ -51,7 +51,9 @@ public class SpectrogramPanelBuilder {
             } else if (lastData[0] != null) {
                 renderWaveform(canvas, lastData[0], safePos(player), color);
             }
+            if (player.loopMarkersActive) drawMarkers(canvas, player, color);
         };
+        player.spectroRedraw = updateFn;
 
         // JavaFX clears canvas contents on every setWidth/setHeight call, so redraw after resize
         canvas.widthProperty().addListener((obs, o, n)  -> { if (n.doubleValue() > 0) Platform.runLater(updateFn); });
@@ -157,6 +159,27 @@ public class SpectrogramPanelBuilder {
             gc.setTextBaseline(javafx.geometry.VPos.CENTER);
             gc.fillText((int)(progress * 100) + "%", 8, h / 2.0);
         }
+    }
+
+    static void drawMarkers(Canvas canvas, PlayerInstance player, Color wc) {
+        double w = canvas.getWidth(), h = canvas.getHeight();
+        if (w <= 0 || h <= 0) return;
+        GraphicsContext gc = canvas.getGraphicsContext2D();
+
+        double inX  = player.loopInPct  / 100.0 * w;
+        double outX = player.loopOutPct / 100.0 * w;
+
+        Color ci = Color.color(0.40, 0.88, 0.55, 0.92);
+        gc.setStroke(ci); gc.setLineWidth(1.5);
+        gc.strokeLine(inX, 0, inX, h);
+        gc.setFill(ci);
+        gc.fillPolygon(new double[]{inX - 5, inX + 5, inX}, new double[]{0, 0, 9}, 3);
+
+        Color co = Color.color(0.92, 0.38, 0.38, 0.92);
+        gc.setStroke(co); gc.setLineWidth(1.5);
+        gc.strokeLine(outX, 0, outX, h);
+        gc.setFill(co);
+        gc.fillPolygon(new double[]{outX - 5, outX + 5, outX}, new double[]{0, 0, 9}, 3);
     }
 
     static double safePos(PlayerInstance player) {

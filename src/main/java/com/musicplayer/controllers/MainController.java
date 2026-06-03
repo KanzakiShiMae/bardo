@@ -176,6 +176,8 @@ public class MainController implements Initializable {
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
 
+    private final Map<String, double[]> loopMarkerMemory = new HashMap<>();
+
     private float[] miniWavePeaks = new float[32];
 
     // Tab drag-reorder state
@@ -816,10 +818,18 @@ public class MainController implements Initializable {
                                        : SpectrogramPanelBuilder.FALLBACK_COLOR;
                 });
             pi.panelSpectroCanvas.setVisible(true);
+            pi.loopMarkersActive = true;
+            pi.stoppedAtLoopOut  = false;
+            double[] saved = loopMarkerMemory.get(pi.song.getVideoId());
+            pi.loopInPct  = saved != null ? saved[0] : 0.0;
+            pi.loopOutPct = saved != null ? saved[1] : 100.0;
+            pi.onMarkersChanged = () -> loopMarkerMemory.put(
+                pi.song.getVideoId(), new double[]{pi.loopInPct, pi.loopOutPct});
             if (pi.panelProgress != null)
                 UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", true);
         } else {
             pi.panelSpectroCanvas.setVisible(false);
+            pi.loopMarkersActive = false;
             if (pi.spectroTimeline != null) { pi.spectroTimeline.stop(); pi.spectroTimeline = null; }
             pi.panelSpectroCanvas.getGraphicsContext2D().clearRect(
                 0, 0, pi.panelSpectroCanvas.getWidth(), pi.panelSpectroCanvas.getHeight());
@@ -848,6 +858,10 @@ public class MainController implements Initializable {
 
         if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
 
+        pi.stoppedAtLoopOut  = false;
+        pi.loopMarkersActive = false;
+        pi.loopInPct         = 0.0;
+        pi.loopOutPct        = 100.0;
         pi.song = song;
         if (pi.panelSpectroCanvas != null) {
             pi.panelSpectroCanvas.setVisible(false);
@@ -889,8 +903,13 @@ public class MainController implements Initializable {
             });
 
             pi.mediaPlayer.setOnEndOfMedia(() -> Platform.runLater(() -> {
-                if (pi.looping) { pi.mediaPlayer.seek(Duration.ZERO); pi.mediaPlayer.play(); }
-                else            { onSongEnded(pi); }
+                if (pi.looping) {
+                    Duration tot    = pi.mediaPlayer.getMedia().getDuration();
+                    Duration seekTo = (pi.loopMarkersActive && tot != null)
+                                      ? tot.multiply(pi.loopInPct / 100.0) : Duration.ZERO;
+                    pi.mediaPlayer.seek(seekTo);
+                    pi.mediaPlayer.play();
+                } else { onSongEnded(pi); }
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
 
@@ -951,6 +970,12 @@ public class MainController implements Initializable {
         if (pi.mashupPartner != null) { toggleMashupPlay(pi); return; }
         if (!pi.isPlaying) {
             if (pi.fadeOutAnim != null) { pi.fadeOutAnim.stop(); pi.fadeOutAnim = null; }
+            if (pi.loopMarkersActive && pi.stoppedAtLoopOut) {
+                pi.stoppedAtLoopOut = false;
+                Duration tot = pi.mediaPlayer.getMedia().getDuration();
+                if (tot != null && tot.greaterThan(Duration.ZERO))
+                    pi.mediaPlayer.seek(tot.multiply(pi.loopInPct / 100.0));
+            }
             pi.mediaPlayer.play();
             pi.isPlaying = true;
             applyVolumesToAll();
@@ -1042,6 +1067,15 @@ public class MainController implements Initializable {
         Duration total = pi.mediaPlayer.getMedia().getDuration();
         if (total == null || !total.greaterThan(Duration.ZERO)) return;
         double pct = (current.toSeconds() / total.toSeconds()) * 100;
+        if (pi.loopMarkersActive && !pi.stoppedAtLoopOut && !pi.seeking && pi.loopOutPct < 100.0 && pct >= pi.loopOutPct) {
+            if (pi.looping) {
+                pi.mediaPlayer.seek(total.multiply(pi.loopInPct / 100.0));
+            } else {
+                pi.stoppedAtLoopOut = true;
+                fadeOutAndPause(pi);
+            }
+            return;
+        }
         String elapsed = UIUtils.formatTime((int) current.toSeconds());
         if (pi.panelProgress != null && !pi.seeking) { pi.panelProgress.setValue(pct); pi.panelElapsed.setText(elapsed); }
         if (pi == focusedPlayer && !seekingByUser) { progressSlider.setValue(pct); timeElapsed.setText(elapsed); }

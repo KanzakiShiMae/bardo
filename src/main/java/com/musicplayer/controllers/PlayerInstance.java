@@ -66,6 +66,14 @@ public class PlayerInstance {
     public Canvas    panelSpectroCanvas;
     public Timeline  spectroTimeline;
 
+    // ── Loop markers A/B ──────────────────────────────────────────────────────
+    public double   loopInPct         = 0.0;
+    public double   loopOutPct        = 100.0;
+    public boolean  loopMarkersActive = false;
+    public boolean  stoppedAtLoopOut  = false;
+    public Runnable spectroRedraw     = null;
+    public Runnable onMarkersChanged  = null;
+
     // ── Mashup pairing ─────────────────────────────────────────────────────────
     /** For Mashup players: the paired secondary player. Null for normal players. */
     public PlayerInstance mashupPartner  = null;
