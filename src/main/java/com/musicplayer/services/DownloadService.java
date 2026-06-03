@@ -12,12 +12,9 @@ public class DownloadService {
     private static final Path BIN_DIR;
 
     static {
-        String appData = System.getenv("APPDATA");
-        Path base = appData != null
-            ? Path.of(appData, "Bardo")
-            : Path.of(System.getProperty("user.home"), ".bardo");
-        BASE_DIR = base.resolve("audio");
-        BIN_DIR  = base.resolve("bin");
+        Path base = PersistenceService.bardoBaseDir();
+        BASE_DIR  = base.resolve("audio");
+        BIN_DIR   = base.resolve("bin");
     }
 
     // ── yt-dlp bundled ───────────────────────────────────────────────────────

@@ -13,12 +13,14 @@ import okhttp3.Request;
 import okhttp3.Response;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -44,7 +46,8 @@ import java.util.stream.Collectors;
  */
 public class YouTubeService {
 
-    private static final String BASE_URL = "https://www.googleapis.com/youtube/v3";
+    private static final String  BASE_URL         = "https://www.googleapis.com/youtube/v3";
+    private static final Pattern DURATION_PATTERN = Pattern.compile("PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?");
     private final String apiKey;
     private final OkHttpClient http;
     private final YouTubeQuotaTracker quotaTracker;
@@ -71,7 +74,12 @@ public class YouTubeService {
                 + "&maxResults=" + maxResults
                 + "&key=" + apiKey;
             quotaTracker.record(YouTubeQuotaTracker.COST_SEARCH);
-            return fetch(url, this::parseVideoSearchResults);
+            try {
+                return parseVideoSearchResults(rawGet(url));
+            } catch (RuntimeException e) {
+                System.err.println("YouTube API error: " + e.getMessage());
+                return FXCollections.observableArrayList();
+            }
         });
     }
 
@@ -133,13 +141,9 @@ public class YouTubeService {
                     + (pageToken != null ? "&pageToken=" + pageToken : "");
 
                 quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
-                String body = rawGet(url);
-                JsonObject root = JsonParser.parseString(body).getAsJsonObject();
-                all.addAll(parsePlaylistItems(root.toString()));
-
-                pageToken = root.has("nextPageToken")
-                    ? root.get("nextPageToken").getAsString()
-                    : null;
+                JsonObject root = JsonParser.parseString(rawGet(url)).getAsJsonObject();
+                all.addAll(parsePlaylistItems(root));
+                pageToken = root.has("nextPageToken") ? root.get("nextPageToken").getAsString() : null;
 
             } while (pageToken != null);
 
@@ -207,9 +211,8 @@ public class YouTubeService {
         return map;
     }
 
-    private ObservableList<Song> parsePlaylistItems(String json) {
+    private ObservableList<Song> parsePlaylistItems(JsonObject root) {
         ObservableList<Song> songs = FXCollections.observableArrayList();
-        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
         JsonArray items = root.getAsJsonArray("items");
 
         for (JsonElement el : items) {
@@ -284,8 +287,7 @@ public class YouTubeService {
 
     private String parseDuration(String iso) {
         if (iso == null || iso.isEmpty()) return "—";
-        java.util.regex.Matcher m = java.util.regex.Pattern
-            .compile("PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?").matcher(iso);
+        java.util.regex.Matcher m = DURATION_PATTERN.matcher(iso);
         if (!m.matches()) return "—";
         int h   = m.group(1) != null ? Integer.parseInt(m.group(1)) : 0;
         int min = m.group(2) != null ? Integer.parseInt(m.group(2)) : 0;
@@ -295,16 +297,6 @@ public class YouTubeService {
     }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
-
-    private <T> T fetch(String url, java.util.function.Function<String, T> parser) {
-        try {
-            String body = rawGet(url);
-            return parser.apply(body);
-        } catch (RuntimeException e) {
-            System.err.println("YouTube API error (fetch): " + e.getMessage());
-            return parser.apply("{\"items\":[]}");
-        }
-    }
 
     // Throws RuntimeException with the HTTP error body on non-2xx responses.
     private String rawGet(String url) {
@@ -333,7 +325,6 @@ public class YouTubeService {
     }
 
     private String encode(String value) {
-        try { return java.net.URLEncoder.encode(value, "UTF-8"); }
-        catch (Exception e) { return value; }
+        return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 }

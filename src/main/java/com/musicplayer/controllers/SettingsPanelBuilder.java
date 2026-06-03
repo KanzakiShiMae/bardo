@@ -73,17 +73,13 @@ public final class SettingsPanelBuilder {
         Label duckValueLbl = new Label(savedPct + "%"); duckValueLbl.getStyleClass().add("volume-pct-label");
         HBox sliderRow = new HBox(12, duckSlider, duckValueLbl); sliderRow.setAlignment(Pos.CENTER_LEFT);
 
-        PauseTransition[] duckSavePause = {null};
+        PauseTransition duckSavePause = new PauseTransition(Duration.millis(600));
+        duckSavePause.setOnFinished(e -> libraryService.saveAmbientDuck((int) Math.round(duckSlider.getValue())));
         duckSlider.valueProperty().addListener((obs, oldVal, newVal) -> {
             int pct = (int) Math.round(newVal.doubleValue());
             duckValueLbl.setText(pct + "%");
             onAmbientDuckChange.accept(pct);
-            if (duckSavePause[0] == null) {
-                duckSavePause[0] = new PauseTransition(Duration.millis(600));
-                duckSavePause[0].setOnFinished(e ->
-                    libraryService.saveAmbientDuck((int) Math.round(duckSlider.getValue())));
-            }
-            duckSavePause[0].playFromStart();
+            duckSavePause.playFromStart();
         });
 
         VBox section = new VBox(8, sectionLbl, descLbl, sliderRow);
@@ -194,16 +190,16 @@ public final class SettingsPanelBuilder {
                 saveQuotaBtn.setDisable(!on);
             });
 
+            PauseTransition clearStatus = new PauseTransition(Duration.seconds(2));
+            clearStatus.setOnFinished(ev -> quotaStatusLbl.setText(""));
             saveQuotaBtn.setOnAction(e -> {
                 try {
                     int val = Integer.parseInt(limitField.getText().strip());
                     quotaTracker.setDailyMax(val);
-                    limitField.setText(String.valueOf(quotaTracker.getDailyMax())); // shows clamped value
+                    limitField.setText(String.valueOf(quotaTracker.getDailyMax()));
                     quotaStatusLbl.setText("✓ Guardado");
                     quotaStatusLbl.setStyle("-fx-text-fill: #27ae60;");
-                    PauseTransition clear = new PauseTransition(Duration.seconds(2));
-                    clear.setOnFinished(ev -> quotaStatusLbl.setText(""));
-                    clear.play();
+                    clearStatus.playFromStart();
                 } catch (NumberFormatException ex) {
                     quotaStatusLbl.setText("⚠ Introduce un número entero.");
                     quotaStatusLbl.setStyle("-fx-text-fill: #c0392b;");

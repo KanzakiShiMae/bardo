@@ -32,12 +32,17 @@ public class PersistenceService {
     private static final Path SETTINGS_FILE;
 
     static {
+        Path base     = bardoBaseDir();
+        SAVE_FILE     = base.resolve("library.json");
+        SETTINGS_FILE = base.resolve("settings.json");
+    }
+
+    /** Returns the Bardo user-data directory ({@code %APPDATA%\Bardo} or {@code ~/.bardo}). */
+    public static Path bardoBaseDir() {
         String appData = System.getenv("APPDATA");
-        Path base = (appData != null)
+        return appData != null
             ? Path.of(appData, "Bardo")
             : Path.of(System.getProperty("user.home"), ".bardo");
-        SAVE_FILE    = base.resolve("library.json");
-        SETTINGS_FILE = base.resolve("settings.json");
     }
 
     private final Gson gson = new GsonBuilder().setPrettyPrinting().create();

@@ -185,32 +185,21 @@ class LoadingOverlay {
 
     // ── Idle loop animation ───────────────────────────────────────────────────
 
-    private ParallelTransition buildSeparate(ImageView[] pieces, double[][] off) {
+    private ParallelTransition buildTranslate(ImageView[] pieces, double[][] toXY, Interpolator interp) {
         ParallelTransition pt = new ParallelTransition();
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < pieces.length; i++) {
             TranslateTransition t = new TranslateTransition(Duration.millis(380), pieces[i]);
-            t.setToX(off[i][0]);
-            t.setToY(off[i][1]);
-            t.setInterpolator(Interpolator.EASE_OUT);
-            pt.getChildren().add(t);
-        }
-        return pt;
-    }
-
-    private ParallelTransition buildReunite(ImageView[] pieces) {
-        ParallelTransition pt = new ParallelTransition();
-        for (ImageView piece : pieces) {
-            TranslateTransition t = new TranslateTransition(Duration.millis(380), piece);
-            t.setToX(0);
-            t.setToY(0);
-            t.setInterpolator(Interpolator.EASE_IN);
+            t.setToX(toXY[i][0]);
+            t.setToY(toXY[i][1]);
+            t.setInterpolator(interp);
             pt.getChildren().add(t);
         }
         return pt;
     }
 
     private void buildAndPlayLoop() {
-        double[][] off = {{-19, -15}, {19, -15}, {0, 24}};
+        double[][] off    = {{-19, -15}, {19, -15}, {0, 24}};
+        double[][] centre = {{0, 0}, {0, 0}, {0, 0}};
         ImageView[] pieces = {piece1, piece2, piece3};
 
         RotateTransition spinCW  = new RotateTransition(Duration.millis(680), iconPane);
@@ -222,15 +211,15 @@ class LoadingOverlay {
         spinCCW.setInterpolator(Interpolator.EASE_BOTH);
 
         loopAnim = new SequentialTransition(
-            buildSeparate(pieces, off),
+            buildTranslate(pieces, off,    Interpolator.EASE_OUT),
             new PauseTransition(Duration.millis(110)),
-            buildReunite(pieces),
+            buildTranslate(pieces, centre, Interpolator.EASE_IN),
             new PauseTransition(Duration.millis(200)),
             spinCW,
             new PauseTransition(Duration.millis(180)),
-            buildSeparate(pieces, off),
+            buildTranslate(pieces, off,    Interpolator.EASE_OUT),
             new PauseTransition(Duration.millis(110)),
-            buildReunite(pieces),
+            buildTranslate(pieces, centre, Interpolator.EASE_IN),
             new PauseTransition(Duration.millis(200)),
             spinCCW,
             new PauseTransition(Duration.millis(220))
@@ -277,14 +266,15 @@ class LoadingOverlay {
         iconPane.setRotate(cur);
         double rotTarget = cur > 180 ? 360 : 0;
 
-        // Animate pieces back to centre and rotation to 0° simultaneously
+        // Reset pieces to centre (only needed when the loop moved them) + rotation simultaneously
         ParallelTransition resetToNeutral = new ParallelTransition();
-        for (ImageView p : new ImageView[]{piece1, piece2, piece3}) {
-            TranslateTransition t = new TranslateTransition(Duration.millis(300), p);
-            t.setToX(0);
-            t.setToY(0);
-            t.setInterpolator(Interpolator.EASE_BOTH);
-            resetToNeutral.getChildren().add(t);
+        if (loopAnim != null) {
+            for (ImageView p : new ImageView[]{piece1, piece2, piece3}) {
+                TranslateTransition t = new TranslateTransition(Duration.millis(300), p);
+                t.setToX(0); t.setToY(0);
+                t.setInterpolator(Interpolator.EASE_BOTH);
+                resetToNeutral.getChildren().add(t);
+            }
         }
         Timeline resetRot = new Timeline(new KeyFrame(Duration.millis(300),
             new KeyValue(iconPane.rotateProperty(), rotTarget, Interpolator.EASE_BOTH)));

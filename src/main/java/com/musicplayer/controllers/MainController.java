@@ -711,14 +711,13 @@ public class MainController implements Initializable {
     }
 
     private void openSongPaused(Song song, LibraryGroup group) {
-        if (song.isLocal()) {
-            doOpenSongPaused(song, group);
-            return;
-        }
-        // Not downloaded: download first, then open paused
+        if (song.isLocal()) { doOpenSongPaused(song, group); return; }
         final LibraryGroup target = group != null ? group : libraryService.getOrCreateHistorial();
         if (group == null) target.addSong(song);
+        downloadThen(song, target, () -> doOpenSongPaused(song, group));
+    }
 
+    private void downloadThen(Song song, LibraryGroup target, Runnable onReady) {
         String vid = song.getVideoId();
         if (downloadingNow.contains(vid)) { showToast("Ya se está descargando «" + song.getTitle() + "»"); return; }
         downloadingNow.add(vid);
@@ -731,7 +730,7 @@ public class MainController implements Initializable {
                 song.setLocalFilePath(path.toString());
                 spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
                 libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
-                doOpenSongPaused(song, group);
+                onReady.run();
             }))
             .exceptionally(ex -> {
                 Platform.runLater(() -> {
@@ -1272,30 +1271,11 @@ public class MainController implements Initializable {
         final LibraryGroup target = group != null ? group : libraryService.getOrCreateHistorial();
         if (group == null) target.addSong(song);
 
-        String vid = song.getVideoId();
-        if (downloadingNow.contains(vid)) { showToast("Ya se está descargando «" + song.getTitle() + "»"); return; }
-        downloadingNow.add(vid);
-        nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
-        nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
-
-        downloadService.downloadAudio(song, target.getId())
-            .thenAccept(path -> Platform.runLater(() -> {
-                downloadingNow.remove(vid);
-                song.setLocalFilePath(path.toString());
-                spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
-                if (group != null) group.incrementPlayCount();
-                libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
-                List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
-                playSongInQueue(song, locals.isEmpty() ? List.of(song) : locals);
-            }))
-            .exceptionally(ex -> {
-                Platform.runLater(() -> {
-                    downloadingNow.remove(vid);
-                    showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
-                    updateMiniPlayerVisibility();
-                });
-                return null;
-            });
+        downloadThen(song, target, () -> {
+            if (group != null) group.incrementPlayCount();
+            List<Song> locals = target.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
+            playSongInQueue(song, locals.isEmpty() ? List.of(song) : locals);
+        });
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
@@ -1713,7 +1693,10 @@ public class MainController implements Initializable {
         tick.run();
         Timeline timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> tick.run()));
         timer.setCycleCount(Animation.INDEFINITE);
-        timer.play();
+        quotaTracker.exhaustedProperty().addListener((obs, was, is) -> {
+            if (Boolean.TRUE.equals(is)) timer.play(); else timer.stop();
+        });
+        if (quotaTracker.isExhausted()) timer.play();
         homeCarouselTimelines.add(timer);
 
         HBox infoRow = new HBox(10, usedLbl, countdownLbl);

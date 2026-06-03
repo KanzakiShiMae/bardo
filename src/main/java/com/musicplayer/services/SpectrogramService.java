@@ -55,11 +55,7 @@ public class SpectrogramService {
     // ── Constructor ───────────────────────────────────────────────────────────
 
     public SpectrogramService() {
-        String appData = System.getenv("APPDATA");
-        Path base = appData != null
-            ? Path.of(appData, "Bardo")
-            : Path.of(System.getProperty("user.home"), ".bardo");
-        cacheDir = base.resolve("spectrograms");
+        cacheDir = PersistenceService.bardoBaseDir().resolve("spectrograms");
         try { Files.createDirectories(cacheDir); } catch (IOException ignored) {}
 
         executor = Executors.newCachedThreadPool(r -> {
