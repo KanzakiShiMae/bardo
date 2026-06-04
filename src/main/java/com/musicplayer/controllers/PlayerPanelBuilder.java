@@ -152,10 +152,10 @@ public final class PlayerPanelBuilder {
         Button ppRepeat = new Button("↺"); ppRepeat.getStyleClass().add("control-btn");
         ppRepeat.setOnAction(e -> {
             pi.looping = !pi.looping;
-            UIUtils.toggleStyleClass(ppRepeat, "control-active", pi.looping);
+            UIUtils.toggleStyleClass(ppRepeat, "control-active-2", pi.looping);
             onLoopToggle.accept(pi);
         });
-        if (pi.looping) ppRepeat.getStyleClass().add("control-active");
+        if (pi.looping) ppRepeat.getStyleClass().add("control-active-2");
         HBox controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
         controls.setAlignment(Pos.CENTER);
 

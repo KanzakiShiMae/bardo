@@ -462,6 +462,11 @@
     -fx-text-fill: bardo-accent;
     -fx-effect: dropshadow(gaussian, bardo-accent, 8, 0.6, 0, 0);
 }
+.control-active-2 {
+    -fx-text-fill: bardo-accent2;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, bardo-accent, 8, 0.6, 0, 0);
+}
 
 /* Progress slider */
 .progress-slider .track {

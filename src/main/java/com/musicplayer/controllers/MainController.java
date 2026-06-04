@@ -837,7 +837,7 @@ public class MainController implements Initializable {
                 UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
         }
         if (pi.panelShuffleBtn != null)
-            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", show);
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active-2", show);
     }
 
     private void navigateTab(int direction) {
@@ -872,7 +872,7 @@ public class MainController implements Initializable {
         if (pi.panelProgress != null)
             UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
         if (pi.panelShuffleBtn != null)
-            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", false);
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active-2", false);
         File file = new File(song.getLocalFilePath());
         if (!file.exists()) { showToast("Archivo no encontrado: " + file.getName()); return; }
 
@@ -1107,7 +1107,7 @@ public class MainController implements Initializable {
         boolean on = focusedPlayer != null && focusedPlayer.looping;
         UIUtils.toggleStyleClass(btnRepeat, "control-active", on);
         if (focusedPlayer != null && focusedPlayer.panelRepeat != null)
-            UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active", on);
+            UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active-2", on);
     }
 
     private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed, float[] peaks) {
