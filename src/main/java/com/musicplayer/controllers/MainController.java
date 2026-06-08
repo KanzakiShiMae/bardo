@@ -252,6 +252,7 @@ public class MainController implements Initializable {
         volumeSlider.setValue(libraryService.loadVolume());
         setupSidebarNavigation();
         SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService, quotaTracker,
+            spectrogramService,
             pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); },
             this::changeAudioDir);
         ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
@@ -1866,7 +1867,6 @@ public class MainController implements Initializable {
         imgView.setStyle("-fx-cursor: hand;");
         if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
             CardBuilder.loadImage(imgView, song.getThumbnailUrl());
-        imgView.setOnMouseClicked(e -> downloadAndPlay(song, null));
 
         Button unpinBtn = new Button("📌");
         unpinBtn.getStyleClass().add("home-overlay-btn");
@@ -1880,6 +1880,11 @@ public class MainController implements Initializable {
         imgContainer.getStyleClass().add("home-playlist-thumb");
         imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(1); ft.play(); });
         imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(0); ft.play(); });
+        imgContainer.setOnMouseClicked(e -> {
+            if (e.getTarget() instanceof Button) return;
+            if (e.getButton() == javafx.scene.input.MouseButton.MIDDLE) { openSongPaused(song, null); return; }
+            downloadAndPlay(song, null);
+        });
 
         Label titleLbl = new Label(song.getTitle());
         titleLbl.getStyleClass().add("home-playlist-name");

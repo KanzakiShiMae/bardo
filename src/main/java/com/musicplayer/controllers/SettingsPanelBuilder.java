@@ -1,26 +1,32 @@
 package com.musicplayer.controllers;
 
+import com.musicplayer.models.LibraryGroup;
+import com.musicplayer.models.Song;
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.LibraryService;
 import com.musicplayer.services.PersistenceService;
+import com.musicplayer.services.SpectrogramService;
 import com.musicplayer.services.YouTubeQuotaTracker;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 import javafx.stage.DirectoryChooser;
 import javafx.util.Duration;
 
 import java.io.File;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
+import java.nio.file.*;
+import java.text.Normalizer;
+import java.util.*;
 import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
+import java.util.stream.Collectors;
 
 /**
  * Construye el contenido del panel de Configuración y lo inyecta en el {@code VBox}
@@ -57,6 +63,7 @@ public final class SettingsPanelBuilder {
                              ThemeManager themeManager,
                              LibraryService libraryService,
                              YouTubeQuotaTracker quotaTracker,
+                             SpectrogramService spectrogramService,
                              DoubleConsumer onAmbientDuckChange,
                              Consumer<Path> onAudioDirChange) {
         int savedPct = libraryService.loadAmbientDuck();
@@ -258,6 +265,21 @@ public final class SettingsPanelBuilder {
         VBox musicDirSection = new VBox(8, musicDirSectionLbl, musicDirDescLbl, pathLbl, changeDirBtn);
         Separator musicDirSep = new Separator(); musicDirSep.setPadding(new Insets(8, 0, 8, 0));
 
+        // ── Descargas ─────────────────────────────────────────────────────────
+        Label downloadsSectionLbl = new Label("DESCARGAS");
+        downloadsSectionLbl.getStyleClass().add("sidebar-section-label");
+        Label downloadsDescLbl = new Label(
+            "Gestiona las canciones descargadas y el espacio de almacenamiento que ocupan.");
+        downloadsDescLbl.setWrapText(true); downloadsDescLbl.getStyleClass().add("greeting-sub");
+
+        Button manageDownloadsBtn = new Button("📦  Ver descargas");
+        manageDownloadsBtn.getStyleClass().add("btn-secondary");
+        manageDownloadsBtn.setOnAction(e ->
+            showDownloadsDialog(settingsPanel, libraryService, spectrogramService));
+
+        VBox downloadsSection = new VBox(8, downloadsSectionLbl, downloadsDescLbl, manageDownloadsBtn);
+        Separator downloadsSep = new Separator(); downloadsSep.setPadding(new Insets(8, 0, 8, 0));
+
         // ── Apariencia ────────────────────────────────────────────────────────
         Label appearanceSectionLbl = new Label("APARIENCIA");
         appearanceSectionLbl.getStyleClass().add("sidebar-section-label");
@@ -380,7 +402,8 @@ public final class SettingsPanelBuilder {
         Separator appearanceSep = new Separator(); appearanceSep.setPadding(new Insets(8, 0, 8, 0));
 
         VBox scrollContent = new VBox(24, header, section, settingsSep, apiSection,
-            quotaSep, quotaSection, musicDirSep, musicDirSection, appearanceSep, appearanceSection);
+            quotaSep, quotaSection, musicDirSep, musicDirSection,
+            downloadsSep, downloadsSection, appearanceSep, appearanceSection);
         scrollContent.setPadding(new Insets(28, 28, 28, 28));
 
         ScrollPane settingsScroll = new ScrollPane(scrollContent);
@@ -390,6 +413,248 @@ public final class SettingsPanelBuilder {
         VBox.setVgrow(settingsScroll, Priority.ALWAYS);
 
         settingsPanel.getChildren().setAll(settingsScroll);
+    }
+
+    // ── Downloads dialog ──────────────────────────────────────────────────────
+
+    private static void showDownloadsDialog(VBox settingsPanel,
+                                             LibraryService libraryService,
+                                             SpectrogramService spectrogramService) {
+        Path spgDir = PersistenceService.bardoBaseDir().resolve("spectrograms");
+
+        // ── Collect data ──────────────────────────────────────────────────────
+        LinkedHashMap<String, Song>     byPath       = new LinkedHashMap<>();
+        HashMap<String, List<Song>>     allByPath    = new HashMap<>();
+        HashMap<String, Set<String>>    pathToGroups = new HashMap<>();
+        LinkedHashMap<String, String>   groupNames   = new LinkedHashMap<>();
+
+        for (LibraryGroup g : libraryService.getGroups()) {
+            for (Song s : g.getSongs()) {
+                if (!s.isLocal()) continue;
+                byPath.putIfAbsent(s.getLocalFilePath(), s);
+                allByPath.computeIfAbsent(s.getLocalFilePath(), k -> new ArrayList<>()).add(s);
+                pathToGroups.computeIfAbsent(s.getLocalFilePath(), k -> new LinkedHashSet<>()).add(g.getId());
+                groupNames.put(g.getId(), g.getName());
+            }
+        }
+        for (Song s : libraryService.getPinnedSongs()) {
+            if (!s.isLocal()) continue;
+            byPath.putIfAbsent(s.getLocalFilePath(), s);
+            allByPath.computeIfAbsent(s.getLocalFilePath(), k -> new ArrayList<>()).add(s);
+        }
+
+        // ── Dialog shell ──────────────────────────────────────────────────────
+        Dialog<Void> dlg = new Dialog<>();
+        dlg.setTitle("Canciones descargadas");
+        dlg.setResizable(true);
+        dlg.initOwner(settingsPanel.getScene().getWindow());
+        if (settingsPanel.getScene() != null)
+            dlg.getDialogPane().getStylesheets().addAll(settingsPanel.getScene().getStylesheets());
+
+        // ── Row record ────────────────────────────────────────────────────────
+        record Row(CheckBox check, String path, long bytes, HBox node,
+                   String normTitle, int insertOrder, Set<String> groupIds) {}
+
+        List<Row> allRows = new ArrayList<>();
+        Label totalLbl = new Label();
+        totalLbl.getStyleClass().add("greeting-sub");
+
+        int[] idx = {0};
+        for (Map.Entry<String, Song> e : byPath.entrySet()) {
+            String fp = e.getKey();
+            Song   s  = e.getValue();
+
+            long ab = 0, spgB = 0;
+            try { ab = Files.size(Path.of(fp)); } catch (Exception ignored) {}
+            String sid = spectrogramService.getSongId(s);
+            if (sid != null) try { spgB = Files.size(spgDir.resolve(sid + ".spg")); } catch (Exception ignored) {}
+            long totalBytes = ab + spgB;
+
+            CheckBox chk = new CheckBox();
+
+            Node thumb;
+            if (s.getThumbnailUrl() != null && !s.getThumbnailUrl().isBlank()) {
+                ImageView iv = new ImageView();
+                iv.setFitWidth(56); iv.setFitHeight(32); iv.setPreserveRatio(false);
+                try { iv.setImage(new Image(s.getThumbnailUrl(), 56, 32, false, true, true)); }
+                catch (Exception ignored) {}
+                thumb = iv;
+            } else {
+                Label ph = new Label("🎵");
+                ph.setStyle("-fx-font-size: 18px; -fx-min-width: 56px; -fx-alignment: center;");
+                thumb = ph;
+            }
+
+            Label nameLbl = new Label(s.getTitle());
+            nameLbl.getStyleClass().add("song-title");
+            HBox.setHgrow(nameLbl, Priority.ALWAYS);
+            nameLbl.setMaxWidth(Double.MAX_VALUE);
+
+            long finalAb = ab; long finalSpgB = spgB;
+            String sizeStr = formatBytes(finalAb) + (finalSpgB > 0 ? " + " + formatBytes(finalSpgB) + " spg" : "");
+            Label sizeLbl = new Label(sizeStr);
+            sizeLbl.getStyleClass().add("song-duration");
+            sizeLbl.setMinWidth(150);
+
+            HBox row = new HBox(10, chk, thumb, nameLbl, sizeLbl);
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setPadding(new Insets(4, 12, 4, 12));
+            row.getStyleClass().add("detail-song-row");
+
+            Set<String> gids = pathToGroups.getOrDefault(fp, Set.of());
+            allRows.add(new Row(chk, fp, totalBytes, row, normalizeStr(s.getTitle()), idx[0]++, gids));
+        }
+
+        // ── Filter / sort state ───────────────────────────────────────────────
+        String[]    searchText = {""};
+        String[]    sortMode   = {"ORDER_ASC"};
+        Set<String> activeGrps = new HashSet<>();
+
+        VBox listBox = new VBox(2);
+
+        Runnable updateTotal = () -> {
+            long sel = allRows.stream().filter(r -> r.check().isSelected()).mapToLong(Row::bytes).sum();
+            long tot = allRows.stream().mapToLong(Row::bytes).sum();
+            totalLbl.setText(formatBytes(tot) + " total" +
+                (sel > 0 ? "  •  " + formatBytes(sel) + " seleccionado" : ""));
+        };
+        allRows.forEach(r -> r.check().selectedProperty().addListener((obs, o, n) -> updateTotal.run()));
+
+        Runnable refresh = () -> {
+            String q = normalizeStr(searchText[0]);
+            Comparator<Row> cmp = switch (sortMode[0]) {
+                case "ORDER_DESC" -> Comparator.<Row>comparingInt(Row::insertOrder).reversed();
+                case "SIZE_ASC"   -> Comparator.comparingLong(Row::bytes);
+                case "SIZE_DESC"  -> Comparator.<Row>comparingLong(Row::bytes).reversed();
+                default           -> Comparator.comparingInt(Row::insertOrder);
+            };
+            List<Node> nodes = allRows.stream()
+                .filter(r -> q.isBlank() || r.normTitle().contains(q))
+                .filter(r -> activeGrps.isEmpty() || r.groupIds().stream().anyMatch(activeGrps::contains))
+                .sorted(cmp)
+                .map(Row::node)
+                .collect(Collectors.toList());
+            if (nodes.isEmpty()) {
+                Label empty = new Label(allRows.isEmpty() ? "No hay canciones descargadas." : "Sin resultados.");
+                empty.getStyleClass().add("greeting-sub");
+                empty.setPadding(new Insets(12));
+                listBox.getChildren().setAll(empty);
+            } else {
+                listBox.getChildren().setAll(nodes);
+            }
+            updateTotal.run();
+        };
+
+        // ── Toolbar: search + sort ────────────────────────────────────────────
+        TextField searchFld = new TextField();
+        searchFld.setPromptText("Buscar…");
+        searchFld.getStyleClass().add("detail-search-field");
+        HBox.setHgrow(searchFld, Priority.ALWAYS);
+        searchFld.textProperty().addListener((obs, o, n) -> { searchText[0] = n; refresh.run(); });
+
+        ComboBox<String> sortBox = new ComboBox<>(FXCollections.observableArrayList(
+            "Más antiguo primero", "Más nuevo primero", "Menor tamaño", "Mayor tamaño"));
+        sortBox.getSelectionModel().selectFirst();
+        sortBox.setOnAction(ev -> {
+            sortMode[0] = switch (sortBox.getSelectionModel().getSelectedIndex()) {
+                case 1  -> "ORDER_DESC";
+                case 2  -> "SIZE_ASC";
+                case 3  -> "SIZE_DESC";
+                default -> "ORDER_ASC";
+            };
+            refresh.run();
+        });
+
+        HBox toolbar = new HBox(8, searchFld, sortBox);
+        toolbar.setAlignment(Pos.CENTER_LEFT);
+        toolbar.setPadding(new Insets(4, 12, 4, 12));
+
+        // ── Playlist filter chips ─────────────────────────────────────────────
+        FlowPane chipsPane = new FlowPane(6, 6);
+        chipsPane.setPadding(new Insets(0, 12, 8, 12));
+
+        for (Map.Entry<String, String> ge : groupNames.entrySet()) {
+            String gid  = ge.getKey();
+            String name = ge.getValue();
+            if (allRows.stream().noneMatch(r -> r.groupIds().contains(gid))) continue;
+
+            Button chip = new Button(name);
+            chip.getStyleClass().add("toggle-btn");
+            chip.setOnAction(ev -> {
+                boolean nowActive = !activeGrps.contains(gid);
+                if (nowActive) activeGrps.add(gid); else activeGrps.remove(gid);
+                UIUtils.toggleStyleClass(chip, "toggle-btn-active", nowActive);
+                refresh.run();
+            });
+            chipsPane.getChildren().add(chip);
+        }
+
+        VBox topBar = chipsPane.getChildren().isEmpty()
+            ? new VBox(0, toolbar)
+            : new VBox(0, toolbar, chipsPane);
+
+        // ── Scroll list ───────────────────────────────────────────────────────
+        ScrollPane scroll = new ScrollPane(listBox);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.getStyleClass().add("results-scroll");
+        scroll.setPrefHeight(380);
+        scroll.setPrefWidth(680);
+
+        // ── Bottom bar ────────────────────────────────────────────────────────
+        CheckBox selectAll = new CheckBox("Seleccionar todo");
+        selectAll.getStyleClass().add("greeting-sub");
+        selectAll.setOnAction(ev ->
+            allRows.forEach(r -> r.check().setSelected(selectAll.isSelected())));
+
+        Button deleteBtn = new Button("🗑  Eliminar seleccionadas");
+        deleteBtn.getStyleClass().add("btn-primary");
+        deleteBtn.setStyle("-fx-background-color: #c0392b;");
+        deleteBtn.setOnAction(ev -> {
+            List<Row> toDelete = allRows.stream()
+                .filter(r -> r.check().isSelected()).collect(Collectors.toList());
+            if (toDelete.isEmpty()) return;
+            for (Row r : toDelete) {
+                try { Files.deleteIfExists(Path.of(r.path())); } catch (Exception ignored) {}
+                Song s = byPath.get(r.path());
+                if (s != null) {
+                    String sid = spectrogramService.getSongId(s);
+                    if (sid != null)
+                        try { Files.deleteIfExists(spgDir.resolve(sid + ".spg")); } catch (Exception ignored) {}
+                }
+                allByPath.getOrDefault(r.path(), List.of()).forEach(song -> song.setLocalFilePath(""));
+            }
+            allRows.removeAll(toDelete);
+            selectAll.setSelected(false);
+            libraryService.save();
+            refresh.run();
+            if (allRows.isEmpty()) dlg.close();
+        });
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+        HBox bottomBar = new HBox(12, selectAll, spacer, totalLbl, deleteBtn);
+        bottomBar.setAlignment(Pos.CENTER_LEFT);
+        bottomBar.setPadding(new Insets(8, 12, 4, 12));
+
+        VBox content = new VBox(4, topBar, scroll, bottomBar);
+        dlg.getDialogPane().setContent(content);
+        dlg.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+
+        refresh.run();
+        dlg.showAndWait();
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024)             return bytes + " B";
+        if (bytes < 1024 * 1024)      return String.format("%.1f KB", bytes / 1024.0);
+        return String.format("%.1f MB", bytes / (1024.0 * 1024));
+    }
+
+    private static String normalizeStr(String s) {
+        if (s == null) return "";
+        String nfd = Normalizer.normalize(s, Normalizer.Form.NFD);
+        return nfd.replaceAll("\\p{InCombiningDiacriticalMarks}", "").toLowerCase();
     }
 
     private static Optional<Path> showDirPicker(VBox settingsPanel,
