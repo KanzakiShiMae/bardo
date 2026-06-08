@@ -6,6 +6,7 @@ import com.musicplayer.models.YouTubePlaylistInfo;
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.DownloadService;
 import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.PersistenceService;
 import com.musicplayer.services.SpectrogramService;
 import com.musicplayer.services.YouTubeQuotaTracker;
 import com.musicplayer.services.YouTubeService;
@@ -35,9 +36,11 @@ import javafx.stage.DirectoryChooser;
 import javafx.util.Duration;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.URL;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -249,7 +252,8 @@ public class MainController implements Initializable {
         volumeSlider.setValue(libraryService.loadVolume());
         setupSidebarNavigation();
         SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService, quotaTracker,
-            pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); });
+            pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); },
+            this::changeAudioDir);
         ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
         applyCircularClip();
         setupLogoDrag();
@@ -1923,6 +1927,158 @@ public class MainController implements Initializable {
             p != pi && p.isPlaying && !p.isMashupLinked &&
             (p.song == null || !"Ambiente".equals(p.song.getType())));
         return nonAmbientePlaying ? pi.volume * ambientDuckRatio : pi.volume;
+    }
+
+    private void changeAudioDir(Path newBaseDir) {
+        String saved = libraryService.loadAudioDir();
+        Path oldBaseDir = saved.isBlank()
+            ? PersistenceService.bardoBaseDir().resolve("audio")
+            : Path.of(saved);
+
+        if (oldBaseDir.equals(newBaseDir)) return;
+
+        // Recopilar rutas reconocidas en el hilo FX antes de ir al hilo de fondo
+        Set<String> recognizedPaths = new HashSet<>();
+        for (LibraryGroup group : libraryService.getGroups())
+            for (Song song : group.getSongs()) {
+                String fp = song.getLocalFilePath();
+                if (fp != null && !fp.isBlank()) recognizedPaths.add(fp);
+            }
+        for (Song pinned : libraryService.getPinnedSongs()) {
+            String fp = pinned.getLocalFilePath();
+            if (fp != null && !fp.isBlank()) recognizedPaths.add(fp);
+        }
+
+        // Solo mover archivos reconocidos que estén dentro de oldBaseDir
+        List<Path> toMove = new ArrayList<>();
+        for (String fp : recognizedPaths) {
+            try {
+                Path p = Path.of(fp);
+                if (p.startsWith(oldBaseDir) && Files.isRegularFile(p)) toMove.add(p);
+            } catch (Exception ignored) {}
+        }
+
+        // Detener reproductores con archivos en oldBaseDir para liberar handles (Windows)
+        for (PlayerInstance pi : new ArrayList<>(activePlayers)) {
+            if (pi.mediaPlayer == null || pi.song == null) continue;
+            String fp = pi.song.getLocalFilePath();
+            if (fp == null || fp.isBlank()) continue;
+            try { if (!Path.of(fp).startsWith(oldBaseDir)) continue; }
+            catch (Exception ignored) { continue; }
+            if (pi.fadeOutAnim  != null) { pi.fadeOutAnim.stop();  pi.fadeOutAnim  = null; }
+            if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
+            pi.mediaPlayer.stop();
+            pi.mediaPlayer.dispose();
+            pi.mediaPlayer = null;
+            pi.isPlaying   = false;
+            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+        }
+        updatePlayPauseButton();
+        pickBestFocusedPlayer();
+
+        // Diálogo de progreso
+        Dialog<Void> progressDlg = new Dialog<>();
+        progressDlg.initOwner(stage());
+        progressDlg.setTitle("Moviendo archivos");
+        progressDlg.getDialogPane().getStylesheets().addAll(stage().getScene().getStylesheets());
+        ProgressBar progressBar = new ProgressBar(toMove.isEmpty() ? ProgressBar.INDETERMINATE_PROGRESS : 0.0);
+        progressBar.setPrefWidth(380);
+        Label progressLbl = new Label(toMove.isEmpty() ? "Escaneando carpeta…"
+                                                       : "0 de " + toMove.size() + " archivos");
+        progressLbl.getStyleClass().add("greeting-sub");
+        VBox dlgBox = new VBox(10, progressLbl, progressBar);
+        dlgBox.setStyle("-fx-padding: 16 24;");
+        progressDlg.getDialogPane().setContent(dlgBox);
+        progressDlg.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        Node closeNode = progressDlg.getDialogPane().lookupButton(ButtonType.CLOSE);
+        closeNode.setVisible(false);
+        closeNode.setManaged(false);
+        progressDlg.show();
+
+        int total = toMove.size();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 1. Copiar archivos reconocidos → destino; eliminar original tras copia exitosa
+                if (!toMove.isEmpty()) {
+                    Files.createDirectories(newBaseDir);
+                    for (int i = 0; i < total; i++) {
+                        Path src = toMove.get(i);
+                        Path dst = newBaseDir.resolve(oldBaseDir.relativize(src));
+                        try {
+                            Files.createDirectories(dst.getParent());
+                            Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+                            Files.delete(src);
+                        } catch (IOException ignored) {}
+                        final int done = i + 1;
+                        Platform.runLater(() -> {
+                            progressBar.setProgress((double) done / total);
+                            progressLbl.setText(done + " de " + total + " archivos movidos");
+                        });
+                    }
+                    // Eliminar subdirectorios vacíos creados por la app en oldBaseDir
+                    if (Files.isDirectory(oldBaseDir)) {
+                        try (var walk = Files.walk(oldBaseDir)) {
+                            walk.sorted(Comparator.<Path>reverseOrder())
+                                .filter(p -> Files.isDirectory(p) && !p.equals(oldBaseDir))
+                                .forEach(p -> {
+                                    try (var ls = Files.list(p)) {
+                                        if (ls.findAny().isEmpty()) Files.delete(p);
+                                    } catch (IOException ignored) {}
+                                });
+                        } catch (IOException ignored) {}
+                    }
+                }
+
+                // 2. Guardar nueva ruta
+                libraryService.saveAudioDir(newBaseDir.toString());
+
+                // 3. Escanear carpeta destino (reconoce archivos preexistentes)
+                Platform.runLater(() -> progressLbl.setText("Escaneando carpeta nueva…"));
+                Map<String, Path> videoIdToFile = new HashMap<>();
+                if (Files.isDirectory(newBaseDir)) {
+                    try (var walk = Files.walk(newBaseDir)) {
+                        walk.filter(Files::isRegularFile).forEach(p -> {
+                            String name = p.getFileName().toString();
+                            int dot = name.indexOf('.');
+                            if (dot > 0) videoIdToFile.put(name.substring(0, dot), p);
+                        });
+                    }
+                }
+
+                // 4 & 5. Actualizar rutas y guardar en el hilo FX
+                Platform.runLater(() -> {
+                    progressBar.setProgress(1.0);
+                    for (LibraryGroup group : libraryService.getGroups()) {
+                        Path groupDir = newBaseDir.resolve(group.getId());
+                        for (Song song : group.getSongs()) {
+                            Path found = videoIdToFile.get(song.getVideoId());
+                            if (found == null && Files.isDirectory(groupDir)) {
+                                String vid = song.getVideoId();
+                                try (var ls = Files.list(groupDir)) {
+                                    found = ls.filter(p -> p.getFileName().toString().startsWith(vid + "."))
+                                               .findFirst().orElse(null);
+                                } catch (IOException ignored) {}
+                            }
+                            if (found != null) song.setLocalFilePath(found.toString());
+                        }
+                    }
+                    for (Song pinned : libraryService.getPinnedSongs()) {
+                        Path found = videoIdToFile.get(pinned.getVideoId());
+                        if (found != null) pinned.setLocalFilePath(found.toString());
+                    }
+                    libraryService.save();
+                    refreshLibraryPanel();
+                    progressDlg.close();
+                    showToast("Carpeta de música actualizada.");
+                });
+            } catch (Exception e) {
+                Platform.runLater(() -> {
+                    progressDlg.close();
+                    showToast("Error al mover archivos: " + e.getMessage());
+                });
+            }
+        });
     }
 
     private void applyVolumesToAll() {

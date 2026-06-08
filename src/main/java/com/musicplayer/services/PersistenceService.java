@@ -53,6 +53,8 @@ public class PersistenceService {
         int    volume        = 70;
         int    ambientDuck   = 60;
         String youtubeApiKey = "";
+        String audioDir      = "";
+        List<String> audioDirHistory = new ArrayList<>();
         Map<String, String> theme         = new HashMap<>();
         Map<String, String> themeVarModes = new HashMap<>();
         boolean dynamicColorsEnabled      = true;
@@ -149,6 +151,28 @@ public class PersistenceService {
 
     public boolean loadTextContrastEnabled() {
         return loadSettingsDto().textContrastEnabled;
+    }
+
+    public void saveAudioDir(String path) {
+        SettingsDto dto = loadSettingsDto();
+        dto.audioDir = path != null ? path : "";
+        writeSettings(dto);
+    }
+
+    public String loadAudioDir() {
+        String dir = loadSettingsDto().audioDir;
+        return dir != null ? dir : "";
+    }
+
+    public void saveAudioDirHistory(List<String> history) {
+        SettingsDto dto = loadSettingsDto();
+        dto.audioDirHistory = history != null ? new ArrayList<>(history) : new ArrayList<>();
+        writeSettings(dto);
+    }
+
+    public List<String> loadAudioDirHistory() {
+        List<String> h = loadSettingsDto().audioDirHistory;
+        return h != null ? new ArrayList<>(h) : new ArrayList<>();
     }
 
     // ── DTOs ─────────────────────────────────────────────────────────────────

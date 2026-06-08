@@ -2,6 +2,7 @@ package com.musicplayer.controllers;
 
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.PersistenceService;
 import com.musicplayer.services.YouTubeQuotaTracker;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
@@ -10,10 +11,15 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
+import javafx.stage.DirectoryChooser;
 import javafx.util.Duration;
 
+import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
 
 /**
@@ -51,7 +57,8 @@ public final class SettingsPanelBuilder {
                              ThemeManager themeManager,
                              LibraryService libraryService,
                              YouTubeQuotaTracker quotaTracker,
-                             DoubleConsumer onAmbientDuckChange) {
+                             DoubleConsumer onAmbientDuckChange,
+                             Consumer<Path> onAudioDirChange) {
         int savedPct = libraryService.loadAmbientDuck();
 
         Label titleLbl    = new Label("Configuración");    titleLbl.getStyleClass().add("greeting");
@@ -213,6 +220,44 @@ public final class SettingsPanelBuilder {
 
         Separator quotaSep = new Separator(); quotaSep.setPadding(new Insets(8, 0, 8, 0));
 
+        // ── Carpeta de música ─────────────────────────────────────────────────
+        Label musicDirSectionLbl = new Label("CARPETA DE MÚSICA");
+        musicDirSectionLbl.getStyleClass().add("sidebar-section-label");
+        Label musicDirDescLbl = new Label(
+            "Ubicación donde se guardan las canciones descargadas de YouTube. " +
+            "Al cambiarla, los archivos existentes se moverán automáticamente.");
+        musicDirDescLbl.setWrapText(true); musicDirDescLbl.getStyleClass().add("greeting-sub");
+
+        String savedDir = libraryService.loadAudioDir();
+        String displayDir = savedDir.isBlank()
+            ? PersistenceService.bardoBaseDir().resolve("audio").toString()
+            : savedDir;
+        Label pathLbl = new Label(displayDir);
+        pathLbl.getStyleClass().add("greeting-sub");
+        pathLbl.setStyle("-fx-font-family: monospace;");
+        pathLbl.setWrapText(true);
+
+        Button changeDirBtn = new Button("📂  Cambiar carpeta");
+        changeDirBtn.getStyleClass().add("btn-secondary");
+        changeDirBtn.setOnAction(e -> {
+            String defaultDir = PersistenceService.bardoBaseDir().resolve("audio").toString();
+            List<String> history = libraryService.loadAudioDirHistory();
+            Optional<Path> chosen = showDirPicker(settingsPanel, pathLbl.getText(), defaultDir, history);
+            chosen.ifPresent(newPath -> {
+                String newStr = newPath.toString();
+                pathLbl.setText(newStr);
+                // Actualizar historial: sin duplicados, sin la ruta por defecto, máx 5
+                history.remove(newStr);
+                if (!newStr.equals(defaultDir)) history.add(0, newStr);
+                if (history.size() > 5) history.subList(5, history.size()).clear();
+                libraryService.saveAudioDirHistory(history);
+                onAudioDirChange.accept(newPath);
+            });
+        });
+
+        VBox musicDirSection = new VBox(8, musicDirSectionLbl, musicDirDescLbl, pathLbl, changeDirBtn);
+        Separator musicDirSep = new Separator(); musicDirSep.setPadding(new Insets(8, 0, 8, 0));
+
         // ── Apariencia ────────────────────────────────────────────────────────
         Label appearanceSectionLbl = new Label("APARIENCIA");
         appearanceSectionLbl.getStyleClass().add("sidebar-section-label");
@@ -335,7 +380,7 @@ public final class SettingsPanelBuilder {
         Separator appearanceSep = new Separator(); appearanceSep.setPadding(new Insets(8, 0, 8, 0));
 
         VBox scrollContent = new VBox(24, header, section, settingsSep, apiSection,
-            quotaSep, quotaSection, appearanceSep, appearanceSection);
+            quotaSep, quotaSection, musicDirSep, musicDirSection, appearanceSep, appearanceSection);
         scrollContent.setPadding(new Insets(28, 28, 28, 28));
 
         ScrollPane settingsScroll = new ScrollPane(scrollContent);
@@ -345,5 +390,117 @@ public final class SettingsPanelBuilder {
         VBox.setVgrow(settingsScroll, Priority.ALWAYS);
 
         settingsPanel.getChildren().setAll(settingsScroll);
+    }
+
+    private static Optional<Path> showDirPicker(VBox settingsPanel,
+                                                 String currentPath,
+                                                 String defaultDir,
+                                                 List<String> history) {
+        Dialog<Path> dialog = new Dialog<>();
+        dialog.setTitle("Carpeta de música");
+        dialog.setResizable(true);
+        dialog.initOwner(settingsPanel.getScene().getWindow());
+
+        if (settingsPanel.getScene() != null)
+            dialog.getDialogPane().getStylesheets().addAll(settingsPanel.getScene().getStylesheets());
+
+        ToggleGroup      tg         = new ToggleGroup();
+        VBox             optionsBox = new VBox(6);
+        List<RadioButton> buttons   = new ArrayList<>();
+
+        // Redimensiona el diálogo para ajustarse al contenido actual
+        Runnable fit = () -> Platform.runLater(() -> {
+            javafx.stage.Window w = dialog.getDialogPane().getScene().getWindow();
+            if (w != null) w.sizeToScene();
+        });
+
+        // Añade una fila: RadioButton + botón eliminar (salvo la predeterminada)
+        java.util.function.BiConsumer<String, Boolean> addRow = (path, isDefault) -> {
+            RadioButton rb = new RadioButton(isDefault ? path + "  (predeterminada)" : path);
+            rb.setToggleGroup(tg);
+            rb.setUserData(Path.of(path));
+            rb.setWrapText(true);
+            rb.getStyleClass().add("greeting-sub");
+            HBox.setHgrow(rb, Priority.ALWAYS);
+            if (path.equals(currentPath)) rb.setSelected(true);
+            buttons.add(rb);
+
+            HBox row = new HBox(8);
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.getChildren().add(rb);
+
+            if (!isDefault) {
+                Button delBtn = new Button("✕");
+                delBtn.getStyleClass().add("row-remove-btn");
+                delBtn.setTooltip(new Tooltip("Eliminar del historial"));
+                delBtn.setOnAction(ev -> {
+                    optionsBox.getChildren().remove(row);
+                    buttons.remove(rb);
+                    history.remove(path);
+                    if (rb.isSelected() && !buttons.isEmpty())
+                        buttons.get(0).setSelected(true);
+                    fit.run();
+                });
+                row.getChildren().add(delBtn);
+            }
+
+            optionsBox.getChildren().add(row);
+        };
+
+        // Ruta predeterminada (siempre primera, sin botón eliminar)
+        addRow.accept(defaultDir, true);
+
+        // Historial (sin duplicar la ruta por defecto)
+        for (String h : history)
+            if (!h.equals(defaultDir)) addRow.accept(h, false);
+
+        // Si ninguna está seleccionada, marcar la primera
+        if (tg.getSelectedToggle() == null && !buttons.isEmpty())
+            buttons.get(0).setSelected(true);
+
+        Separator sep = new Separator();
+        sep.setPadding(new Insets(6, 0, 2, 0));
+
+        Button exploreBtn = new Button("📂  Explorar otra carpeta…");
+        exploreBtn.getStyleClass().add("btn-secondary");
+        exploreBtn.setOnAction(ev -> {
+            DirectoryChooser dc = new DirectoryChooser();
+            dc.setTitle("Seleccionar carpeta de música");
+            Toggle sel = tg.getSelectedToggle();
+            if (sel != null) {
+                File init = new File(sel.getUserData().toString());
+                if (init.isDirectory()) dc.setInitialDirectory(init);
+            }
+            File chosen = dc.showDialog(settingsPanel.getScene().getWindow());
+            if (chosen != null) {
+                String chosenStr = chosen.getAbsolutePath();
+                boolean found = buttons.stream()
+                    .filter(rb -> rb.getUserData().toString().equals(chosenStr))
+                    .peek(rb -> rb.setSelected(true))
+                    .findFirst().isPresent();
+                if (!found) {
+                    addRow.accept(chosenStr, false);
+                    buttons.get(buttons.size() - 1).setSelected(true);
+                    fit.run();
+                }
+            }
+        });
+
+        VBox content = new VBox(8, optionsBox, sep, exploreBtn);
+        content.setPadding(new Insets(8, 4, 8, 4));
+
+        dialog.getDialogPane().setContent(content);
+        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
+        dialog.getDialogPane().setPrefWidth(560);
+
+        dialog.setResultConverter(bt -> {
+            if (bt == ButtonType.OK) {
+                Toggle sel = tg.getSelectedToggle();
+                return sel != null ? (Path) sel.getUserData() : null;
+            }
+            return null;
+        });
+
+        return dialog.showAndWait();
     }
 }
