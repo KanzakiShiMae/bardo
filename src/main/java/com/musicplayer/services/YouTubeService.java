@@ -75,7 +75,11 @@ public class YouTubeService {
                 + "&key=" + apiKey;
             quotaTracker.record(YouTubeQuotaTracker.COST_SEARCH);
             try {
-                return parseVideoSearchResults(rawGet(url));
+                ObservableList<Song> songs = parseVideoSearchResults(rawGet(url));
+                // +1 unit per ≤50 results to fetch durations
+                if (!songs.isEmpty())
+                    applyDurations(songs, fetchDurations(songs.stream().map(Song::getVideoId).collect(Collectors.toList())));
+                return songs;
             } catch (RuntimeException e) {
                 System.err.println("YouTube API error: " + e.getMessage());
                 return FXCollections.observableArrayList();
@@ -146,6 +150,10 @@ public class YouTubeService {
                 pageToken = root.has("nextPageToken") ? root.get("nextPageToken").getAsString() : null;
 
             } while (pageToken != null);
+
+            // +1 unit per 50 songs to fetch durations
+            if (!all.isEmpty())
+                applyDurations(all, fetchDurations(all.stream().map(Song::getVideoId).collect(Collectors.toList())));
 
             return all;
         });
@@ -283,6 +291,33 @@ public class YouTubeService {
             info.setItemCount(count);
             return info;
         });
+    }
+
+    // Batch-fetches durations for up to N video IDs; costs 1 quota unit per 50 IDs.
+    private Map<String, String> fetchDurations(List<String> videoIds) {
+        Map<String, String> result = new HashMap<>();
+        for (int i = 0; i < videoIds.size(); i += 50) {
+            List<String> batch = videoIds.subList(i, Math.min(i + 50, videoIds.size()));
+            String url = BASE_URL + "/videos"
+                + "?part=contentDetails"
+                + "&id=" + String.join(",", batch)
+                + "&key=" + apiKey;
+            quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
+            try {
+                JsonObject root = JsonParser.parseString(rawGet(url)).getAsJsonObject();
+                for (JsonElement el : root.getAsJsonArray("items")) {
+                    JsonObject obj = el.getAsJsonObject();
+                    String vid = obj.get("id").getAsString();
+                    String dur = parseDuration(obj.getAsJsonObject("contentDetails").get("duration").getAsString());
+                    result.put(vid, dur);
+                }
+            } catch (Exception ignored) {}
+        }
+        return result;
+    }
+
+    private void applyDurations(Iterable<Song> songs, Map<String, String> durations) {
+        songs.forEach(s -> { String d = durations.get(s.getVideoId()); if (d != null) s.setDuration(d); });
     }
 
     private String parseDuration(String iso) {

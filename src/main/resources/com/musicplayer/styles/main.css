@@ -388,7 +388,15 @@
 }
 .song-title    { -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: bardo-text; }
 .song-artist   { -fx-font-size: 11px; -fx-text-fill: derive(bardo-text-muted, -5%); }
-.song-duration { -fx-font-size: 10px; -fx-text-fill: derive(bardo-text-muted, 15%); }
+.song-duration { -fx-font-size: 11px; -fx-text-fill: bardo-text; }
+.dl-badge {
+    -fx-font-size: 9px;
+    -fx-text-fill: white;
+    -fx-background-color: bardo-accent;
+    -fx-background-radius: 20px;
+    -fx-padding: 2 5 2 5;
+    -fx-font-weight: bold;
+}
 
 .search-spinner { -fx-progress-color: bardo-accent; }
 

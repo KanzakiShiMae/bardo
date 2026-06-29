@@ -35,6 +35,7 @@ import javafx.scene.media.MediaPlayer;
 import javafx.stage.DirectoryChooser;
 import javafx.util.Duration;
 
+import ws.schild.jave.MultimediaObject;
 import java.io.File;
 import java.io.IOException;
 import java.net.URL;
@@ -170,9 +171,10 @@ public class MainController implements Initializable {
     private DownloadService     downloadService;
     private SpectrogramService  spectrogramService;
 
-    private final Set<String>        downloadingNow = new HashSet<>();
-    private final List<AppTab>       openTabs       = new ArrayList<>();
-    private final List<PlayerInstance> activePlayers = new ArrayList<>();
+    private final Set<String>          downloadingNow = new HashSet<>();
+    private final List<AppTab>         openTabs       = new ArrayList<>();
+    private final List<PlayerInstance> activePlayers  = new ArrayList<>();
+    private final ArrayDeque<String>   tabHistory     = new ArrayDeque<>();
     private AppTab         activeTab;
     private PlayerInstance focusedPlayer;
 
@@ -532,6 +534,8 @@ public class MainController implements Initializable {
 
     private void activateTab(AppTab tab) {
         activeTab = tab;
+        if (tabHistory.isEmpty() || !tabHistory.peek().equals(tab.id))
+            tabHistory.push(tab.id);
         contentArea.getChildren().forEach(n -> { n.setVisible(false); n.setManaged(false); n.setMouseTransparent(true); });
         tab.panel.setVisible(true); tab.panel.setManaged(true); tab.panel.setMouseTransparent(false);
 
@@ -577,8 +581,22 @@ public class MainController implements Initializable {
             pickBestFocusedPlayer();
             updateMiniPlayerVisibility();
         }
-        if (!openTabs.isEmpty()) activateTab(openTabs.get(Math.max(0, idx - 1)));
-        else rebuildTabBar();
+        // Remove all history entries for the closed tab
+        tabHistory.removeIf(hid -> hid.equals(id));
+
+        if (!openTabs.isEmpty()) {
+            if (tab == activeTab) {
+                // Navigate to the most recently visited tab still open
+                AppTab prev = null;
+                for (String hid : tabHistory) {
+                    prev = findTab(hid);
+                    if (prev != null) break;
+                }
+                activateTab(prev != null ? prev : openTabs.get(Math.max(0, idx - 1)));
+            } else {
+                rebuildTabBar();
+            }
+        } else rebuildTabBar();
     }
 
     private static final double TAB_WIDTH = 168;
@@ -750,6 +768,12 @@ public class MainController implements Initializable {
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
                 song.setLocalFilePath(path.toString());
+                if (song.getDuration() == null || song.getDuration().equals("—") || song.getDuration().isBlank()) {
+                    try {
+                        long ms = new MultimediaObject(path.toFile()).getInfo().getDuration();
+                        if (ms > 0) song.setDuration(UIUtils.formatTime((int) (ms / 1000)));
+                    } catch (Exception ignored) {}
+                }
                 spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
                 libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
                 onReady.run();
@@ -893,6 +917,10 @@ public class MainController implements Initializable {
                     Platform.runLater(() -> {
                         if (pi.panelTotal != null) pi.panelTotal.setText(totalStr);
                         if (pi == focusedPlayer) timeTotal.setText(totalStr);
+                        if (song.getDuration() == null || song.getDuration().equals("—") || song.getDuration().isBlank()) {
+                            song.setDuration(totalStr);
+                            libraryService.save();
+                        }
                     });
                 }
             });
@@ -1590,9 +1618,18 @@ public class MainController implements Initializable {
         String original = refreshBtn.getText(); refreshBtn.setDisable(true); refreshBtn.setText("…");
         youTubeService.getPlaylistItems(group.getYoutubePlaylistId())
             .thenAccept(songs -> Platform.runLater(() -> {
+                // Update durations of songs already in the group
+                Map<String, Song> fetchedMap = songs.stream()
+                    .collect(Collectors.toMap(Song::getVideoId, s -> s, (a, b) -> a));
+                group.getSongs().forEach(s -> {
+                    Song f = fetchedMap.get(s.getVideoId());
+                    if (f != null && (s.getDuration() == null || s.getDuration().equals("—") || s.getDuration().isBlank()))
+                        s.setDuration(f.getDuration());
+                });
+                // Add truly new songs at the end
                 Set<String> existing = group.getSongs().stream().map(Song::getVideoId).collect(Collectors.toSet());
                 List<Song> newSongs = songs.stream().filter(s -> !existing.contains(s.getVideoId())).collect(Collectors.toList());
-                for (int i = newSongs.size() - 1; i >= 0; i--) group.getSongs().add(0, newSongs.get(i));
+                group.getSongs().addAll(newSongs);
                 refreshBtn.setDisable(false); refreshBtn.setText(original);
                 int added = newSongs.size();
                 showToast(added > 0
@@ -1658,7 +1695,14 @@ public class MainController implements Initializable {
             menu.getItems().add(new SeparatorMenuItem());
             groups.forEach(g -> {
                 MenuItem item = new MenuItem((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName());
-                item.setOnAction(ev -> { libraryService.addSongToGroup(song, g); refreshLibraryPanel(); showToast("Añadido a «" + g.getName() + "»"); });
+                item.setOnAction(ev -> {
+                    if (g.getSongs().stream().noneMatch(s -> s.getVideoId().equals(song.getVideoId()))) {
+                        song.setType(g.getType());
+                        g.getSongs().add(0, song);
+                        libraryService.save();
+                    }
+                    refreshLibraryPanel(); showToast("Añadido a «" + g.getName() + "»");
+                });
                 menu.getItems().add(item);
             });
         }
@@ -1890,10 +1934,7 @@ public class MainController implements Initializable {
         titleLbl.getStyleClass().add("home-playlist-name");
         titleLbl.setMaxWidth(160);
 
-        Label artistLbl = new Label(song.getArtist());
-        artistLbl.getStyleClass().add("home-playlist-count");
-
-        card.getChildren().addAll(imgContainer, titleLbl, artistLbl);
+        card.getChildren().addAll(imgContainer, titleLbl);
         return card;
     }
 

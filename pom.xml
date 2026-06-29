@@ -6,7 +6,7 @@
 
     <groupId>com.musicplayer</groupId>
     <artifactId>bardo</artifactId>
-    <version>0.3.0-alpha</version>
+    <version>0.3.6-alpha</version>
     <packaging>jar</packaging>
     <name>Bardo</name>
     <description>Reproductor de música de escritorio con JavaFX, multicanal, integración YouTube y biblioteca local.</description>

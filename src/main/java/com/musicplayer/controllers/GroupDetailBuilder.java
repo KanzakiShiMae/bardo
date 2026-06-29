@@ -158,7 +158,7 @@ public final class GroupDetailBuilder {
         searchField.textProperty().addListener((obs, old, query) -> {
             String q = normalize(query);
             filteredSongs.setPredicate(q.isEmpty() ? null
-                : s -> normalize(s.getTitle()).contains(q) || normalize(s.getArtist()).contains(q));
+                : s -> normalize(s.getTitle()).contains(q));
         });
 
         Label searchIcon = new Label("🔍");
@@ -188,9 +188,10 @@ public final class GroupDetailBuilder {
                     setPadding(Insets.EMPTY);
                     setStyle("-fx-background-color: transparent; -fx-border-width: 0;");
                     if (empty || song == null) { setGraphic(null); return; }
+                    HBox row;
                     if ("Mashup".equals(group.getType())) {
                         String badge = song == mashupSel[0] ? "①" : song == mashupSel[1] ? "②" : null;
-                        setGraphic(detailSongRowMashup(song, group, badge, onBrowser, () -> {
+                        row = detailSongRowMashup(song, group, badge, onBrowser, () -> {
                             if (justDragged[0]) { justDragged[0] = false; return; }
                             if      (song == mashupSel[0]) mashupSel[0] = null;
                             else if (song == mashupSel[1]) mashupSel[1] = null;
@@ -199,14 +200,16 @@ public final class GroupDetailBuilder {
                             mashupPlayBtn[0].setDisable(mashupSel[0] == null || mashupSel[1] == null);
                             songList.refresh();
                         }, moved -> Platform.runLater(() -> songList.scrollTo(filteredSongs.indexOf(moved))),
-                        libraryService, onToast, onPinChanged));
+                        libraryService, onToast, onPinChanged);
                     } else {
-                        setGraphic(detailSongRow(song, group, onBrowser,
+                        row = detailSongRow(song, group, onBrowser,
                             () -> { if (!justDragged[0]) onPlaySong.accept(song, group); justDragged[0] = false; },
                             () -> onOpenPaused.accept(song, group),
                             moved -> Platform.runLater(() -> songList.scrollTo(filteredSongs.indexOf(moved))),
-                            libraryService, onToast, onPinChanged));
+                            libraryService, onToast, onPinChanged);
                     }
+                    row.prefWidthProperty().bind(lv.widthProperty().subtract(2));
+                    setGraphic(row);
                 }
             };
 
@@ -292,12 +295,20 @@ public final class GroupDetailBuilder {
             row.getChildren().add(ph);
         }
 
-        Label titleLbl  = new Label(song.getTitle());  titleLbl.getStyleClass().add("song-title");  titleLbl.setMaxWidth(300);
-        Label artistLbl = new Label(song.getArtist()); artistLbl.getStyleClass().add("song-artist");
-        VBox info = new VBox(2, titleLbl, artistLbl); HBox.setHgrow(info, Priority.ALWAYS);
+        Label titleLbl = new Label(song.getTitle()); titleLbl.getStyleClass().add("song-title");
+        titleLbl.setMaxWidth(Double.MAX_VALUE); titleLbl.setMinWidth(0);
+        HBox.setHgrow(titleLbl, Priority.ALWAYS);
+        row.getChildren().add(titleLbl);
 
-        Label durLbl = new Label(song.getDuration()); durLbl.getStyleClass().add("song-duration"); durLbl.setMinWidth(40);
-        row.getChildren().addAll(info, durLbl);
+        if (song.isLocal()) {
+            Label dlBadge = new Label("⬇"); dlBadge.getStyleClass().add("dl-badge");
+            row.getChildren().add(dlBadge);
+        }
+
+        String dur = song.getDuration();
+        Label durLbl = new Label(dur != null && !dur.isBlank() ? dur : "—");
+        durLbl.getStyleClass().add("song-duration"); durLbl.setMinWidth(40);
+        row.getChildren().add(durLbl);
 
         if (hasThumb) {
             Button linkBtn = new Button("🔗"); linkBtn.getStyleClass().add("row-link-btn");
@@ -313,11 +324,10 @@ public final class GroupDetailBuilder {
         // Playlist checklist button
         Button checklistBtn = new Button("≡"); checklistBtn.getStyleClass().add("row-checklist-btn");
         ContextMenu[] menuRef = {null};
-        // MOUSE_PRESSED filter runs before the popup's auto-hide, so isShowing() is still true here
         checklistBtn.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
             if (menuRef[0] != null && menuRef[0].isShowing()) {
                 menuRef[0].hide();
-                e.consume(); // stop MOUSE_RELEASED → onAction from firing
+                e.consume();
             }
         });
         checklistBtn.setOnAction(e -> {
@@ -345,22 +355,15 @@ public final class GroupDetailBuilder {
         });
         row.getChildren().add(pinBtn);
 
-        // Move arrows (±10 positions)
-        Button upBtn   = new Button("↑"); upBtn.getStyleClass().add("row-move-btn");
-        Button downBtn = new Button("↓"); downBtn.getStyleClass().add("row-move-btn");
-        upBtn.setOnAction(ev -> {
-            moveInList(group.getSongs(), song, -10);
-            if (onMoved != null) onMoved.accept(song);
-        });
-        downBtn.setOnAction(ev -> {
-            moveInList(group.getSongs(), song, 10);
-            if (onMoved != null) onMoved.accept(song);
-        });
-        VBox moveBox = new VBox(0, upBtn, downBtn); moveBox.setAlignment(Pos.CENTER);
-
         Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("row-remove-btn");
-        removeBtn.setOnAction(e -> group.removeSong(song));
-        row.getChildren().addAll(moveBox, removeBtn);
+        removeBtn.setOnAction(e -> {
+            Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+            alert.setTitle("Eliminar canción");
+            alert.setHeaderText(null);
+            alert.setContentText("¿Eliminar «" + song.getTitle() + "» de «" + group.getName() + "»?");
+            alert.showAndWait().filter(r -> r == ButtonType.OK).ifPresent(r -> group.removeSong(song));
+        });
+        row.getChildren().add(removeBtn);
 
         row.setOnMouseClicked(e -> {
             if (e.getTarget() instanceof Button) return;
@@ -393,11 +396,20 @@ public final class GroupDetailBuilder {
             row.getChildren().add(ph);
         }
 
-        Label titleLbl  = new Label(song.getTitle());  titleLbl.getStyleClass().add("song-title");  titleLbl.setMaxWidth(300);
-        Label artistLbl = new Label(song.getArtist()); artistLbl.getStyleClass().add("song-artist");
-        VBox info = new VBox(2, titleLbl, artistLbl); HBox.setHgrow(info, Priority.ALWAYS);
-        Label durLbl = new Label(song.getDuration()); durLbl.getStyleClass().add("song-duration"); durLbl.setMinWidth(40);
-        row.getChildren().addAll(info, durLbl);
+        Label titleLbl = new Label(song.getTitle()); titleLbl.getStyleClass().add("song-title");
+        titleLbl.setMaxWidth(Double.MAX_VALUE); titleLbl.setMinWidth(0);
+        HBox.setHgrow(titleLbl, Priority.ALWAYS);
+        row.getChildren().add(titleLbl);
+
+        if (song.isLocal()) {
+            Label dlBadge = new Label("⬇"); dlBadge.getStyleClass().add("dl-badge");
+            row.getChildren().add(dlBadge);
+        }
+
+        String durM = song.getDuration();
+        Label durLbl = new Label(durM != null && !durM.isBlank() ? durM : "—");
+        durLbl.getStyleClass().add("song-duration"); durLbl.setMinWidth(40);
+        row.getChildren().add(durLbl);
 
         if (hasThumb) {
             Button linkBtn = new Button("🔗"); linkBtn.getStyleClass().add("row-link-btn");
@@ -443,16 +455,15 @@ public final class GroupDetailBuilder {
         });
         row.getChildren().add(pinBtnM);
 
-        // Move arrows
-        Button upBtn   = new Button("↑"); upBtn.getStyleClass().add("row-move-btn");
-        Button downBtn = new Button("↓"); downBtn.getStyleClass().add("row-move-btn");
-        upBtn.setOnAction(ev   -> { moveInList(group.getSongs(), song, -10); if (onMoved != null) onMoved.accept(song); });
-        downBtn.setOnAction(ev -> { moveInList(group.getSongs(), song,  10); if (onMoved != null) onMoved.accept(song); });
-        VBox moveBox = new VBox(0, upBtn, downBtn); moveBox.setAlignment(Pos.CENTER);
-
         Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("row-remove-btn");
-        removeBtn.setOnAction(e -> group.removeSong(song));
-        row.getChildren().addAll(moveBox, removeBtn);
+        removeBtn.setOnAction(e -> {
+            Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+            alert.setTitle("Eliminar canción");
+            alert.setHeaderText(null);
+            alert.setContentText("¿Eliminar «" + song.getTitle() + "» de «" + group.getName() + "»?");
+            alert.showAndWait().filter(r -> r == ButtonType.OK).ifPresent(r -> group.removeSong(song));
+        });
+        row.getChildren().add(removeBtn);
 
         row.setOnMouseClicked(e -> { if (!(e.getTarget() instanceof Button)) onSelect.run(); });
         return row;
@@ -469,10 +480,9 @@ public final class GroupDetailBuilder {
             item.setSelected(inGroup);
             item.setOnAction(ev -> {
                 if (item.isSelected()) {
-                    // Add to beginning of this playlist
                     if (!g.getSongs().stream().anyMatch(s -> s.getVideoId().equals(song.getVideoId()))) {
-                        g.getSongs().add(0, song);
                         song.setType(g.getType());
+                        g.getSongs().add(0, song);
                         onToast.accept("Añadido a «" + g.getName() + "»");
                     }
                 } else {
