@@ -65,6 +65,11 @@ public class Song {
         return p != null && !p.isBlank();
     }
 
+    public boolean hasDuration() {
+        String d = getDuration();
+        return d != null && !d.isBlank() && !"—".equals(d);
+    }
+
     // ── Getters ───────────────────────────────────────────────────────────────
 
     public String getVideoId()       { return videoId.get(); }

@@ -149,10 +149,22 @@ public final class CardBuilder {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    // Bounded LRU cache so the same thumbnail URL isn't re-fetched/re-decoded every time
+    // it appears in another card (search results, home panel, pinned songs, etc.).
+    private static final int MAX_CACHED_THUMBS = 300;
+    private static final java.util.Map<String, Image> thumbCache =
+        new java.util.LinkedHashMap<>(64, 0.75f, true) {
+            @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, Image> eldest) {
+                return size() > MAX_CACHED_THUMBS;
+            }
+        };
+
     static void loadImage(ImageView iv, String url) {
-        if (url != null && !url.isBlank()) {
-            try { iv.setImage(new Image(url, true)); } catch (Exception ignored) {}
-        }
+        if (url == null || url.isBlank()) return;
+        try {
+            Image img = thumbCache.computeIfAbsent(url, u -> new Image(u, true));
+            iv.setImage(img);
+        } catch (Exception ignored) {}
     }
 
     private static void hoverLift(VBox card, VBox overlay) {

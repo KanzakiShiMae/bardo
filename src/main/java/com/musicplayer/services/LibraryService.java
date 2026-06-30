@@ -102,6 +102,10 @@ public class LibraryService {
     public void saveDynamicColorsEnabled(boolean enabled)       { persistence.saveDynamicColorsEnabled(enabled); }
     public boolean loadTextContrastEnabled()                    { return persistence.loadTextContrastEnabled(); }
     public void saveTextContrastEnabled(boolean enabled)        { persistence.saveTextContrastEnabled(enabled); }
+    public String loadAudioDir()                                { return persistence.loadAudioDir(); }
+    public void saveAudioDir(String path)                       { persistence.saveAudioDir(path); }
+    public List<String> loadAudioDirHistory()                   { return persistence.loadAudioDirHistory(); }
+    public void saveAudioDirHistory(List<String> history)       { persistence.saveAudioDirHistory(history); }
 
     /** Agrupa ráfagas de cambios en una sola escritura a disco tras 600 ms de inactividad. */
     private void debouncedSave() {

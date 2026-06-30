@@ -19,13 +19,13 @@ import java.util.concurrent.CompletableFuture;
  */
 public class DownloadService {
 
-    private static final Path BASE_DIR;
-    private static final Path BIN_DIR;
+    private static final Path BIN_DIR = PersistenceService.bardoBaseDir().resolve("bin");
 
-    static {
-        Path base = PersistenceService.bardoBaseDir();
-        BASE_DIR  = base.resolve("audio");
-        BIN_DIR   = base.resolve("bin");
+    private Path getAudioBaseDir() {
+        String saved = LibraryService.getInstance().loadAudioDir();
+        return (saved != null && !saved.isBlank())
+            ? Path.of(saved)
+            : PersistenceService.bardoBaseDir().resolve("audio");
     }
 
     // ── yt-dlp bundled ───────────────────────────────────────────────────────
@@ -53,7 +53,7 @@ public class DownloadService {
     // ── Carpeta de grupo ─────────────────────────────────────────────────────
 
     public Path getGroupDir(String groupId) {
-        return BASE_DIR.resolve(groupId);
+        return getAudioBaseDir().resolve(groupId);
     }
 
     // ── Descarga ─────────────────────────────────────────────────────────────

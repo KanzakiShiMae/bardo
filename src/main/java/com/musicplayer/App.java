@@ -20,13 +20,31 @@ import javafx.stage.StageStyle;
  */
 public class App extends Application {
 
+    // Minimum dimensions derived from fixed UI components:
+    //   sidebar 220 + song-row buttons ~300 + title min ~200 + scroll ~20 = 740 content
+    //   now-playing: left-min 220 + slider-min 200 + right-min 200 = 620 → total 840
+    //   → round up to 960 so the quota bar and playlist cards have breathing room
+    private static final double MIN_W = 960;
+    //   title-bar ~32 + tab-bar 42 + content ~450 + now-playing ~80 = 604
+    //   → add margin for quota widget + home cards
+    private static final double MIN_H = 660;
+
     @Override
     public void start(Stage stage) throws Exception {
         FXMLLoader loader = new FXMLLoader(
             getClass().getResource("/com/musicplayer/views/main.fxml")
         );
 
-        Scene scene = new Scene(loader.load(), 1100, 700);
+        // Size to 80 % × 85 % of the primary screen, floored at the hard minimums
+        javafx.geometry.Rectangle2D sb =
+            javafx.stage.Screen.getPrimary().getVisualBounds();
+        double initW = Math.max(MIN_W, sb.getWidth()  * 0.80);
+        double initH = Math.max(MIN_H, sb.getHeight() * 0.85);
+        // Never exceed the available screen area
+        initW = Math.min(initW, sb.getWidth());
+        initH = Math.min(initH, sb.getHeight());
+
+        Scene scene = new Scene(loader.load(), initW, initH);
         scene.getStylesheets().add(
             getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm()
         );
@@ -37,10 +55,15 @@ public class App extends Application {
         String v = ConfigLoader.getVersion();
         stage.initStyle(StageStyle.UNDECORATED);
         stage.setTitle(v.isBlank() ? "Bardo" : "Bardo v" + v);
-        stage.setFullScreenExitHint("");           // oculta el aviso nativo "Press ESC"
+        stage.setFullScreenExitHint("");
         stage.setScene(scene);
-        stage.setMinWidth(900);
-        stage.setMinHeight(600);
+        stage.setMinWidth(MIN_W);
+        stage.setMinHeight(MIN_H);
+
+        // Center on the primary screen (UNDECORATED stages don't self-center)
+        stage.setX(sb.getMinX() + (sb.getWidth()  - initW) / 2.0);
+        stage.setY(sb.getMinY() + (sb.getHeight() - initH) / 2.0);
+
         stage.show();
     }
 

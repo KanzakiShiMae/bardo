@@ -116,6 +116,28 @@ public final class PlayerPanelBuilder {
         progressStack.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(progressStack, Priority.ALWAYS);
 
+        // Drag handlers for loop markers A/B (only active when loopMarkersActive)
+        final double SNAP = 8.0;
+        final int[]  drag = {0}; // 0=none, 1=loopIn, 2=loopOut
+        progressStack.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            if (!pi.loopMarkersActive) return;
+            double sw = progressStack.getWidth();
+            if      (Math.abs(e.getX() - pi.loopInPct  / 100.0 * sw) <= SNAP) { drag[0] = 1; e.consume(); }
+            else if (Math.abs(e.getX() - pi.loopOutPct / 100.0 * sw) <= SNAP) { drag[0] = 2; e.consume(); }
+        });
+        progressStack.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_DRAGGED, e -> {
+            if (drag[0] == 0) return;
+            double pct = Math.max(0, Math.min(100, e.getX() / progressStack.getWidth() * 100));
+            if (drag[0] == 1) pi.loopInPct  = Math.min(pct, pi.loopOutPct - 1);
+            else              pi.loopOutPct = Math.max(pct, pi.loopInPct  + 1);
+            if (pi.spectroRedraw    != null) pi.spectroRedraw.run();
+            if (pi.onMarkersChanged != null) pi.onMarkersChanged.run();
+            e.consume();
+        });
+        progressStack.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_RELEASED, e -> {
+            if (drag[0] != 0) { drag[0] = 0; e.consume(); }
+        });
+
         HBox timeRow = new HBox(14, panelElapsed, progressStack, panelTotal);
         timeRow.setAlignment(Pos.CENTER);
         timeRow.setMaxWidth(Double.MAX_VALUE);
@@ -130,10 +152,10 @@ public final class PlayerPanelBuilder {
         Button ppRepeat = new Button("↺"); ppRepeat.getStyleClass().add("control-btn");
         ppRepeat.setOnAction(e -> {
             pi.looping = !pi.looping;
-            UIUtils.toggleStyleClass(ppRepeat, "control-active", pi.looping);
+            UIUtils.toggleStyleClass(ppRepeat, "control-active-2", pi.looping);
             onLoopToggle.accept(pi);
         });
-        if (pi.looping) ppRepeat.getStyleClass().add("control-active");
+        if (pi.looping) ppRepeat.getStyleClass().add("control-active-2");
         HBox controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
         controls.setAlignment(Pos.CENTER);
 

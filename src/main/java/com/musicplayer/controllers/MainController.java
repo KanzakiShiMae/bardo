@@ -6,6 +6,7 @@ import com.musicplayer.models.YouTubePlaylistInfo;
 import com.musicplayer.services.ConfigLoader;
 import com.musicplayer.services.DownloadService;
 import com.musicplayer.services.LibraryService;
+import com.musicplayer.services.PersistenceService;
 import com.musicplayer.services.SpectrogramService;
 import com.musicplayer.services.YouTubeQuotaTracker;
 import com.musicplayer.services.YouTubeService;
@@ -34,10 +35,13 @@ import javafx.scene.media.MediaPlayer;
 import javafx.stage.DirectoryChooser;
 import javafx.util.Duration;
 
+import ws.schild.jave.MultimediaObject;
 import java.io.File;
+import java.io.IOException;
 import java.net.URL;
-import java.nio.file.Path;
+import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
@@ -157,6 +161,7 @@ public class MainController implements Initializable {
 
     private ResizeHelper     resizeHelper;
     private Timeline         globalProgressTimer;
+    private javafx.beans.value.ChangeListener<Boolean> quotaExhaustedListener;
     private PauseTransition  volumeSavePause;
     private javafx.stage.Popup toastPopup;
     private SequentialTransition toastAnim;
@@ -167,16 +172,31 @@ public class MainController implements Initializable {
     private DownloadService     downloadService;
     private SpectrogramService  spectrogramService;
 
-    private final Set<String>        downloadingNow = new HashSet<>();
-    private final List<AppTab>       openTabs       = new ArrayList<>();
-    private final List<PlayerInstance> activePlayers = new ArrayList<>();
+    private final Set<String>          downloadingNow = new HashSet<>();
+    private final List<AppTab>         openTabs       = new ArrayList<>();
+    private final List<PlayerInstance> activePlayers  = new ArrayList<>();
+    private final ArrayDeque<String>   tabHistory     = new ArrayDeque<>();
     private AppTab         activeTab;
     private PlayerInstance focusedPlayer;
 
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
 
+    private final Map<String, double[]> loopMarkerMemory = new HashMap<>();
+
     private float[] miniWavePeaks = new float[32];
+
+    // Cached theme colors for drawWaveCanvas — rebuilt only on theme change
+    private String cachedWaveHexA, cachedWaveHexA2;
+    private Color  cachedWaveCa,   cachedWaveCa2;
+
+    // Cached gradients for drawWaveCanvas, one slot for the main panel canvases and one
+    // for the mini canvas — rebuilt only when width or colors change, not every frame.
+    private final LinearGradient[] cachedFillGrad   = new LinearGradient[2];
+    private final LinearGradient[] cachedLineGrad   = new LinearGradient[2];
+    private final double[]         cachedGradW      = {-1, -1};
+    private final String[]         cachedGradHexA   = new String[2];
+    private final String[]         cachedGradHexA2  = new String[2];
 
     // Tab drag-reorder state
     private AppTab  tabDragging;
@@ -247,7 +267,9 @@ public class MainController implements Initializable {
         volumeSlider.setValue(libraryService.loadVolume());
         setupSidebarNavigation();
         SettingsPanelBuilder.build(settingsPanel, themeManager, libraryService, quotaTracker,
-            pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); });
+            spectrogramService,
+            pct -> { ambientDuckRatio = pct / 100.0; applyVolumesToAll(); },
+            this::changeAudioDir);
         ambientDuckRatio = libraryService.loadAmbientDuck() / 100.0;
         applyCircularClip();
         setupLogoDrag();
@@ -525,12 +547,19 @@ public class MainController implements Initializable {
 
     private void activateTab(AppTab tab) {
         activeTab = tab;
+        if (tabHistory.isEmpty() || !tabHistory.peek().equals(tab.id))
+            tabHistory.push(tab.id);
         contentArea.getChildren().forEach(n -> { n.setVisible(false); n.setManaged(false); n.setMouseTransparent(true); });
         tab.panel.setVisible(true); tab.panel.setManaged(true); tab.panel.setMouseTransparent(false);
 
         if (tab.id.startsWith("player:") || tab.id.startsWith("mashup:")) {
             PlayerInstance pi = findPlayerInstance(tab.id);
-            if (pi != null) setFocusedPlayer(pi);
+            if (pi != null) {
+                setFocusedPlayer(pi);
+                // Redibujado inmediato del espectrograma: su ciclo de 300ms está gateado por
+                // visibilidad, así que al volver a la pestaña refrescamos ya en vez de esperar.
+                if (pi.spectroRedraw != null) pi.spectroRedraw.run();
+            }
         }
         updateMiniPlayerVisibility();
 
@@ -538,8 +567,6 @@ public class MainController implements Initializable {
         if (tab.sidebarBtn != null) tab.sidebarBtn.getStyleClass().add("nav-btn-active");
 
         rebuildTabBar();
-        FadeTransition ft = new FadeTransition(Duration.millis(150), tab.panel);
-        ft.setFromValue(0); ft.setToValue(1); ft.play();
     }
 
     private void closeTab(String id) {
@@ -570,46 +597,102 @@ public class MainController implements Initializable {
             pickBestFocusedPlayer();
             updateMiniPlayerVisibility();
         }
-        if (!openTabs.isEmpty()) activateTab(openTabs.get(Math.max(0, idx - 1)));
-        else rebuildTabBar();
+        // Remove all history entries for the closed tab
+        tabHistory.removeIf(hid -> hid.equals(id));
+
+        if (!openTabs.isEmpty()) {
+            if (tab == activeTab) {
+                // Navigate to the most recently visited tab still open
+                AppTab prev = tabHistory.stream()
+                    .map(this::findTab).filter(Objects::nonNull).findFirst().orElse(null);
+                activateTab(prev != null ? prev : openTabs.get(Math.max(0, idx - 1)));
+            } else {
+                rebuildTabBar();
+            }
+        } else rebuildTabBar();
     }
 
     private static final double TAB_WIDTH = 168;
 
+    /**
+     * Crea el nodo de la barra de pestañas para {@code tab} (estructura fija: layout,
+     * label, dot de "reproduciendo", botón de cierre, handlers de clic y arrastre).
+     * Se llama una sola vez por pestaña; los cambios posteriores de estado (activa,
+     * reproduciendo, título) se aplican con {@link #updateTabNodeStyle} sin recrear el nodo.
+     */
+    private HBox createTabNode(AppTab tab) {
+        HBox btn = new HBox(4); btn.getStyleClass().add("tab-btn");
+        btn.setAlignment(Pos.CENTER); btn.setPrefWidth(TAB_WIDTH); btn.setMinWidth(TAB_WIDTH); btn.setMaxWidth(TAB_WIDTH);
+
+        Label lbl = new Label(); lbl.getStyleClass().add("tab-label");
+        lbl.setMaxWidth(tab.closeable ? TAB_WIDTH - 48 : TAB_WIDTH - 20); lbl.setMinWidth(0);
+        HBox.setHgrow(lbl, Priority.ALWAYS);
+        btn.getChildren().add(lbl);
+
+        Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
+        dot.setManaged(false); dot.setVisible(false); // visibilidad real la fija updateTabNodeStyle
+        btn.getChildren().add(dot);
+
+        if (tab.closeable) {
+            Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
+            final String tid = tab.id; x.setOnAction(e -> { e.consume(); closeTab(tid); });
+            btn.getChildren().add(x);
+        }
+
+        btn.setUserData(tab);
+        btn.setOnMouseClicked(e -> {
+            if (tabJustDragged) { tabJustDragged = false; return; }
+            if      (e.getButton() == MouseButton.MIDDLE  && tab.closeable)                     closeTab(tab.id);
+            else if (e.getButton() == MouseButton.PRIMARY && !(e.getTarget() instanceof Button)) activateTab(tab);
+        });
+        setupTabDrag(btn, tab);
+        return btn;
+    }
+
+    /** Aplica al nodo ya existente de {@code tab} su estado actual (activa/reproduciendo/título). */
+    private void updateTabNodeStyle(AppTab tab) {
+        HBox btn = tab.barNode;
+        if (btn == null) return;
+        UIUtils.toggleStyleClass(btn, "tab-btn-active", tab == activeTab);
+
+        PlayerInstance tabPi = (tab.id.startsWith("player:") || tab.id.startsWith("mashup:"))
+            ? findPlayerInstance(tab.id) : null;
+        boolean playing = tabPi != null && tabPi.isPlaying;
+        UIUtils.toggleStyleClass(btn, "tab-btn-playing", playing);
+
+        Label lbl = (Label) btn.getChildren().get(0);
+        lbl.setText(tab.icon + "  " + tab.title);
+
+        Label dot = (Label) btn.getChildren().get(1);
+        dot.setVisible(playing); dot.setManaged(playing);
+    }
+
+    /**
+     * Sincroniza la barra de pestañas con {@code openTabs} de forma incremental:
+     * crea nodos solo para pestañas nuevas, quita los de pestañas cerradas, reordena
+     * si hace falta, y refresca el estilo de todas — sin recrear nodos que ya existen.
+     * Reemplaza el antiguo "clear + recrear todo" en cada apertura/cierre/cambio de estado.
+     */
     private void rebuildTabBar() {
-        tabBar.getChildren().clear();
-        for (AppTab tab : openTabs) {
-            HBox btn = new HBox(4); btn.getStyleClass().add("tab-btn");
-            if (tab == activeTab)   btn.getStyleClass().add("tab-btn-active");
-            btn.setAlignment(Pos.CENTER); btn.setPrefWidth(TAB_WIDTH); btn.setMinWidth(TAB_WIDTH); btn.setMaxWidth(TAB_WIDTH);
+        List<Node> children = tabBar.getChildren();
+        children.removeIf(n -> {
+            boolean keep = n.getUserData() instanceof AppTab t && openTabs.contains(t);
+            if (!keep && n.getUserData() instanceof AppTab removed) removed.barNode = null;
+            return !keep;
+        });
 
-            PlayerInstance tabPi = (tab.id.startsWith("player:") || tab.id.startsWith("mashup:"))
-                ? findPlayerInstance(tab.id) : null;
-            boolean playing = tabPi != null && tabPi.isPlaying;
-            if (playing) btn.getStyleClass().add("tab-btn-playing");
-
-            Label lbl = new Label(tab.icon + "  " + tab.title); lbl.getStyleClass().add("tab-label");
-            lbl.setMaxWidth(tab.closeable ? TAB_WIDTH - 48 : TAB_WIDTH - 20); lbl.setMinWidth(0);
-            HBox.setHgrow(lbl, Priority.ALWAYS); btn.getChildren().add(lbl);
-
-            if (playing) {
-                Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
-                btn.getChildren().add(dot);
+        for (int i = 0; i < openTabs.size(); i++) {
+            AppTab tab = openTabs.get(i);
+            HBox node = tab.barNode;
+            if (node == null || !children.contains(node)) {
+                node = createTabNode(tab);
+                tab.barNode = node;
+                children.add(Math.min(i, children.size()), node);
+            } else {
+                int curIdx = children.indexOf(node);
+                if (curIdx != i) { children.remove(node); children.add(i, node); }
             }
-            if (tab.closeable) {
-                Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
-                final String tid = tab.id; x.setOnAction(e -> { e.consume(); closeTab(tid); });
-                btn.getChildren().add(x);
-            }
-            final AppTab t = tab;
-            btn.setUserData(tab);
-            btn.setOnMouseClicked(e -> {
-                if (tabJustDragged) { tabJustDragged = false; return; }
-                if      (e.getButton() == MouseButton.MIDDLE  && t.closeable)                       closeTab(t.id);
-                else if (e.getButton() == MouseButton.PRIMARY && !(e.getTarget() instanceof Button)) activateTab(t);
-            });
-            setupTabDrag(btn, tab);
-            tabBar.getChildren().add(btn);
+            updateTabNodeStyle(tab);
         }
         scrollActiveTabIntoView();
     }
@@ -743,6 +826,12 @@ public class MainController implements Initializable {
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
                 song.setLocalFilePath(path.toString());
+                if (!song.hasDuration()) {
+                    try {
+                        long ms = new MultimediaObject(path.toFile()).getInfo().getDuration();
+                        if (ms > 0) song.setDuration(UIUtils.formatTime((int) (ms / 1000)));
+                    } catch (Exception ignored) {}
+                }
                 spectrogramService.computeFromFile(spectrogramService.getSongId(song), path);
                 libraryService.save(); refreshLibraryPanel(); refreshSidebarList();
                 onReady.run();
@@ -816,10 +905,18 @@ public class MainController implements Initializable {
                                        : SpectrogramPanelBuilder.FALLBACK_COLOR;
                 });
             pi.panelSpectroCanvas.setVisible(true);
+            pi.loopMarkersActive = true;
+            pi.stoppedAtLoopOut  = false;
+            double[] saved = loopMarkerMemory.get(pi.song.getVideoId());
+            pi.loopInPct  = saved != null ? saved[0] : 0.0;
+            pi.loopOutPct = saved != null ? saved[1] : 100.0;
+            pi.onMarkersChanged = () -> loopMarkerMemory.put(
+                pi.song.getVideoId(), new double[]{pi.loopInPct, pi.loopOutPct});
             if (pi.panelProgress != null)
                 UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", true);
         } else {
             pi.panelSpectroCanvas.setVisible(false);
+            pi.loopMarkersActive = false;
             if (pi.spectroTimeline != null) { pi.spectroTimeline.stop(); pi.spectroTimeline = null; }
             pi.panelSpectroCanvas.getGraphicsContext2D().clearRect(
                 0, 0, pi.panelSpectroCanvas.getWidth(), pi.panelSpectroCanvas.getHeight());
@@ -827,7 +924,7 @@ public class MainController implements Initializable {
                 UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
         }
         if (pi.panelShuffleBtn != null)
-            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", show);
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active-2", show);
     }
 
     private void navigateTab(int direction) {
@@ -848,6 +945,10 @@ public class MainController implements Initializable {
 
         if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
 
+        pi.stoppedAtLoopOut  = false;
+        pi.loopMarkersActive = false;
+        pi.loopInPct         = 0.0;
+        pi.loopOutPct        = 100.0;
         pi.song = song;
         if (pi.panelSpectroCanvas != null) {
             pi.panelSpectroCanvas.setVisible(false);
@@ -858,7 +959,7 @@ public class MainController implements Initializable {
         if (pi.panelProgress != null)
             UIUtils.toggleStyleClass(pi.panelProgress, "spectro-mode", false);
         if (pi.panelShuffleBtn != null)
-            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active", false);
+            UIUtils.toggleStyleClass(pi.panelShuffleBtn, "control-active-2", false);
         File file = new File(song.getLocalFilePath());
         if (!file.exists()) { showToast("Archivo no encontrado: " + file.getName()); return; }
 
@@ -874,6 +975,10 @@ public class MainController implements Initializable {
                     Platform.runLater(() -> {
                         if (pi.panelTotal != null) pi.panelTotal.setText(totalStr);
                         if (pi == focusedPlayer) timeTotal.setText(totalStr);
+                        if (!song.hasDuration()) {
+                            song.setDuration(totalStr);
+                            libraryService.save();
+                        }
                     });
                 }
             });
@@ -889,13 +994,18 @@ public class MainController implements Initializable {
             });
 
             pi.mediaPlayer.setOnEndOfMedia(() -> Platform.runLater(() -> {
-                if (pi.looping) { pi.mediaPlayer.seek(Duration.ZERO); pi.mediaPlayer.play(); }
-                else            { onSongEnded(pi); }
+                if (pi.looping) {
+                    Duration tot    = pi.mediaPlayer.getMedia().getDuration();
+                    Duration seekTo = (pi.loopMarkersActive && tot != null)
+                                      ? tot.multiply(pi.loopInPct / 100.0) : Duration.ZERO;
+                    pi.mediaPlayer.seek(seekTo);
+                    pi.mediaPlayer.play();
+                } else { onSongEnded(pi); }
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
 
             // ── Audio spectrum → forma de onda en tiempo real ────────────────
-            final int BANDS = 32;
+            final int BANDS = 64;
             pi.waveSmoothed = new float[BANDS];
             pi.wavePeaks    = new float[BANDS];
             final float[] smoothed = pi.waveSmoothed;
@@ -904,13 +1014,20 @@ public class MainController implements Initializable {
             pi.mediaPlayer.setAudioSpectrumInterval(1.0 / 30);
             pi.mediaPlayer.setAudioSpectrumListener((ts, dur2, mags, phases) -> {
                 for (int i = 0; i < BANDS; i++) {
-                    float target = Math.max(0f, (mags[i] + 60f) / 60f);
+                    float raw   = Math.max(0f, (mags[i] + 60f) / 60f);
+                    // Los agudos tienen menos energía por naturaleza; boost progresivo
+                    // para que todo el wave reaccione: 1x para graves, 3x para agudos
+                    float boost  = 1.0f + (float) i / (BANDS - 1) * 2.0f;
+                    float target = Math.min(1.0f, raw * boost);
                     smoothed[i] = smoothed[i] * 0.55f + target * 0.45f;
                 }
                 if (!pending[0]) {
                     pending[0] = true;
                     Platform.runLater(() -> {
-                        drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
+                        // El canvas del panel solo es visible si su pestaña está activa;
+                        // dibujarlo cuando está oculta es trabajo desperdiciado.
+                        if (pi.panel != null && pi.panel.isVisible())
+                            drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
                         if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed, miniWavePeaks);
                         pending[0] = false;
                     });
@@ -947,6 +1064,12 @@ public class MainController implements Initializable {
         if (pi.mashupPartner != null) { toggleMashupPlay(pi); return; }
         if (!pi.isPlaying) {
             if (pi.fadeOutAnim != null) { pi.fadeOutAnim.stop(); pi.fadeOutAnim = null; }
+            if (pi.loopMarkersActive && pi.stoppedAtLoopOut) {
+                pi.stoppedAtLoopOut = false;
+                Duration tot = pi.mediaPlayer.getMedia().getDuration();
+                if (tot != null && tot.greaterThan(Duration.ZERO))
+                    pi.mediaPlayer.seek(tot.multiply(pi.loopInPct / 100.0));
+            }
             pi.mediaPlayer.play();
             pi.isPlaying = true;
             applyVolumesToAll();
@@ -1038,9 +1161,25 @@ public class MainController implements Initializable {
         Duration total = pi.mediaPlayer.getMedia().getDuration();
         if (total == null || !total.greaterThan(Duration.ZERO)) return;
         double pct = (current.toSeconds() / total.toSeconds()) * 100;
+        if (pi.loopMarkersActive && !pi.stoppedAtLoopOut && !pi.seeking && pi.loopOutPct < 100.0 && pct >= pi.loopOutPct) {
+            if (pi.looping) {
+                pi.mediaPlayer.seek(total.multiply(pi.loopInPct / 100.0));
+            } else {
+                pi.stoppedAtLoopOut = true;
+                fadeOutAndPause(pi);
+            }
+            return;
+        }
+        // El slider/tiempo del panel solo se ve con su pestaña activa; la barra inferior
+        // (Now Playing) solo refleja al reproductor con foco. Para pestañas en segundo plano
+        // sin foco no hay nada visible que actualizar — saltamos formatTime y los setters.
+        boolean panelVisible  = pi.panelProgress != null && !pi.seeking
+                                && pi.panel != null && pi.panel.isVisible();
+        boolean bottomVisible = pi == focusedPlayer && !seekingByUser;
+        if (!panelVisible && !bottomVisible) return;
         String elapsed = UIUtils.formatTime((int) current.toSeconds());
-        if (pi.panelProgress != null && !pi.seeking) { pi.panelProgress.setValue(pct); pi.panelElapsed.setText(elapsed); }
-        if (pi == focusedPlayer && !seekingByUser) { progressSlider.setValue(pct); timeElapsed.setText(elapsed); }
+        if (panelVisible)  { pi.panelProgress.setValue(pct); pi.panelElapsed.setText(elapsed); }
+        if (bottomVisible) { progressSlider.setValue(pct); timeElapsed.setText(elapsed); }
     }
 
     private void playPrevInInstance(PlayerInstance pi) {
@@ -1069,7 +1208,7 @@ public class MainController implements Initializable {
         boolean on = focusedPlayer != null && focusedPlayer.looping;
         UIUtils.toggleStyleClass(btnRepeat, "control-active", on);
         if (focusedPlayer != null && focusedPlayer.panelRepeat != null)
-            UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active", on);
+            UIUtils.toggleStyleClass(focusedPlayer.panelRepeat, "control-active-2", on);
     }
 
     private void drawWaveCanvas(javafx.scene.canvas.Canvas canvas, float[] smoothed, float[] peaks) {
@@ -1080,18 +1219,18 @@ public class MainController implements Initializable {
         if (smoothed == null || peaks == null) return;
 
         boolean isMini = (w <= 100);
-        double gap  = isMini ? 1.0 : 1.5;
-        double barW = isMini ? 2.5 : 4.0;
-        int    n    = smoothed.length;
-        int displayBars = Math.max(2, (int)((w + gap) / (barW + gap)));
-        if (displayBars % 2 != 0) displayBars--;
-        barW = (w - gap * (displayBars - 1)) / displayBars;
-        int half = displayBars / 2;
+        int n = smoothed.length;
 
         String hexA  = themeManager.currentTheme.get("bardo-accent");
         String hexA2 = themeManager.currentTheme.get("bardo-accent2");
-        Color ca  = hexA  != null ? Color.web(hexA)  : Color.web("#f4a7b9");
-        Color ca2 = hexA2 != null ? Color.web(hexA2) : Color.web("#b39ddb");
+        if (!Objects.equals(hexA, cachedWaveHexA) || !Objects.equals(hexA2, cachedWaveHexA2)) {
+            cachedWaveHexA  = hexA;
+            cachedWaveHexA2 = hexA2;
+            cachedWaveCa    = hexA  != null ? Color.web(hexA)  : Color.web("#f4a7b9");
+            cachedWaveCa2   = hexA2 != null ? Color.web(hexA2) : Color.web("#b39ddb");
+        }
+        Color ca  = cachedWaveCa;
+        Color ca2 = cachedWaveCa2;
 
         if (isMini) {
             gc.setFill(Color.rgb(15, 5, 25, 0.35));
@@ -1099,55 +1238,95 @@ public class MainController implements Initializable {
         }
 
         double centerY = h / 2.0;
+        double maxH    = centerY * 0.88;
+        double minH    = isMini ? 1.5 : 2.0;
 
-        for (int i = 0; i < displayBars; i++) {
-            int    dist = (i < half) ? (half - 1 - i) : (i - half);
-            double t    = (half > 1) ? (double) dist / (half - 1) : 0.0;
-
-            double bandF  = t * (n - 1);
-            int    bLow   = (int) bandF;
-            int    bHigh  = Math.min(bLow + 1, n - 1);
-            float  frac   = (float)(bandF - bLow);
-            float  energy = smoothed[bLow] * (1 - frac) + smoothed[bHigh] * frac;
-
-            int pkIdx = Math.max(0, Math.min(n - 1, bLow));
-            if (energy > peaks[pkIdx]) peaks[pkIdx] = energy;
-            else peaks[pkIdx] = Math.max(0f, peaks[pkIdx] - 0.011f);
-            float peakEnergy = peaks[pkIdx];
-
-            double halfH     = Math.max(isMini ? 1.5 : 2.0, energy     * centerY * 0.92);
-            double peakHalfH = Math.max(halfH,               peakEnergy * centerY * 0.92);
-            double x = i * (barW + gap);
-
-            double r = lerp(ca.getRed(),   ca2.getRed(),   t);
-            double g = lerp(ca.getGreen(), ca2.getGreen(), t);
-            double b = lerp(ca.getBlue(),  ca2.getBlue(),  t);
-
-            // Soft glow halo (main canvas only)
-            if (!isMini) {
-                gc.setFill(Color.color(r, g, b, 0.10));
-                gc.fillRoundRect(x - 3, centerY - halfH - 2, barW + 6, halfH * 2 + 4, 6, 6);
-            }
-
-            // Top half — bright at tip, fades to center
-            gc.setFill(new LinearGradient(0, centerY - halfH, 0, centerY, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.color(r, g, b, isMini ? 0.92 : 0.95)),
-                new Stop(1, Color.color(r, g, b, 0.20))));
-            gc.fillRoundRect(x, centerY - halfH, barW, halfH, 2, 2);
-
-            // Bottom half — mirror
-            gc.setFill(new LinearGradient(0, centerY, 0, centerY + halfH, false, CycleMethod.NO_CYCLE,
-                new Stop(0, Color.color(r, g, b, 0.20)),
-                new Stop(1, Color.color(r, g, b, isMini ? 0.92 : 0.95))));
-            gc.fillRoundRect(x, centerY, barW, halfH, 2, 2);
-
-            // Peak caps (main canvas only)
-            if (!isMini && peakHalfH > halfH + 2) {
-                gc.setFill(Color.color(r, g, b, 0.85));
-                gc.fillRect(x, centerY - peakHalfH - 2.5, barW, 2.5);
-                gc.fillRect(x, centerY + peakHalfH,       barW, 2.5);
-            }
+        // Layout espejo: graves en el centro, agudos en los extremos (simétrico)
+        double[] xs = new double[n];
+        double[] ys = new double[n];
+        for (int i = 0; i < n; i++) {
+            double tPos  = (double) i / (n - 1);        // 0.0 → 1.0 (izq → der)
+            double tBand = 2.0 * Math.abs(tPos - 0.5);  // 0.0 en centro → 1.0 en extremos
+            xs[i] = tPos * (w - 1.0);
+            double bandF = tBand * (n - 1);
+            int    bLow  = Math.max(0, Math.min(n - 2, (int) bandF));
+            float  frac  = (float)(bandF - bLow);
+            float  val   = smoothed[bLow] * (1 - frac) + smoothed[bLow + 1] * frac;
+            ys[i] = centerY - Math.max(minH, val * maxH);
         }
+
+        double fillAlpha = isMini ? 0.45 : 0.28;
+        double lineAlpha = isMini ? 0.85 : 0.92;
+        double lineWidth = isMini ? 1.5 : 2.0;
+
+        int slot = isMini ? 1 : 0;
+        if (cachedFillGrad[slot] == null || cachedGradW[slot] != w
+                || !Objects.equals(cachedGradHexA[slot], hexA) || !Objects.equals(cachedGradHexA2[slot], hexA2)) {
+            cachedGradW[slot]     = w;
+            cachedGradHexA[slot]  = hexA;
+            cachedGradHexA2[slot] = hexA2;
+            cachedFillGrad[slot] = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), fillAlpha)),
+                new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), fillAlpha)));
+            cachedLineGrad[slot] = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), lineAlpha)),
+                new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), lineAlpha)));
+        }
+        LinearGradient fillGrad = cachedFillGrad[slot];
+        LinearGradient lineGrad = cachedLineGrad[slot];
+
+        // Relleno superior (entre curva y línea central)
+        gc.setFill(fillGrad);
+        gc.beginPath();
+        gc.moveTo(xs[0], centerY);
+        gc.lineTo(xs[0], ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], ys[n - 1]);
+        gc.lineTo(xs[n - 1], centerY);
+        gc.closePath();
+        gc.fill();
+
+        // Relleno inferior (espejo)
+        gc.beginPath();
+        gc.moveTo(xs[0], centerY);
+        gc.lineTo(xs[0], h - ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = h - (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], h - ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], h - ys[n - 1]);
+        gc.lineTo(xs[n - 1], centerY);
+        gc.closePath();
+        gc.fill();
+
+        // Línea brillante superior
+        gc.setStroke(lineGrad);
+        gc.setLineWidth(lineWidth);
+        gc.beginPath();
+        gc.moveTo(xs[0], ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], ys[n - 1]);
+        gc.stroke();
+
+        // Línea brillante inferior (espejo)
+        gc.beginPath();
+        gc.moveTo(xs[0], h - ys[0]);
+        for (int i = 0; i < n - 1; i++) {
+            double midX = (xs[i] + xs[i + 1]) / 2.0;
+            double midY = h - (ys[i] + ys[i + 1]) / 2.0;
+            gc.quadraticCurveTo(xs[i], h - ys[i], midX, midY);
+        }
+        gc.lineTo(xs[n - 1], h - ys[n - 1]);
+        gc.stroke();
     }
 
     private static double lerp(double a, double b, double t) { return a + t * (b - a); }
@@ -1155,6 +1334,15 @@ public class MainController implements Initializable {
     private void startWaveDecay(PlayerInstance pi) {
         if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
         if (pi.waveSmoothed == null) return;
+        // Si nadie ve esta onda (pestaña oculta y reproductor sin foco), no animamos el
+        // decaimiento: aplanamos el array de una vez y dejamos el canvas plano con un solo
+        // dibujado, evitando ~30fps de trabajo inútil en segundo plano.
+        boolean panelVisible = pi.panel != null && pi.panel.isVisible();
+        if (!panelVisible && pi != focusedPlayer) {
+            Arrays.fill(pi.waveSmoothed, 0f);
+            if (pi.panelWaveCanvas != null) drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
+            return;
+        }
         pi.waveDecayAnim = new Timeline(new KeyFrame(Duration.millis(33), e -> {
             if (pi.waveSmoothed == null) { pi.waveDecayAnim.stop(); return; }
             boolean allZero = true;
@@ -1162,7 +1350,8 @@ public class MainController implements Initializable {
                 pi.waveSmoothed[i] *= 0.82f;
                 if (pi.waveSmoothed[i] > 0.004f) allZero = false;
             }
-            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
+            if (pi.panel != null && pi.panel.isVisible())
+                drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
             if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
             if (allZero) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
         }));
@@ -1522,9 +1711,18 @@ public class MainController implements Initializable {
         String original = refreshBtn.getText(); refreshBtn.setDisable(true); refreshBtn.setText("…");
         youTubeService.getPlaylistItems(group.getYoutubePlaylistId())
             .thenAccept(songs -> Platform.runLater(() -> {
+                // Update durations of songs already in the group
+                Map<String, Song> fetchedMap = songs.stream()
+                    .collect(Collectors.toMap(Song::getVideoId, s -> s, (a, b) -> a));
+                group.getSongs().forEach(s -> {
+                    Song f = fetchedMap.get(s.getVideoId());
+                    if (f != null && !s.hasDuration())
+                        s.setDuration(f.getDuration());
+                });
+                // Add truly new songs at the end
                 Set<String> existing = group.getSongs().stream().map(Song::getVideoId).collect(Collectors.toSet());
                 List<Song> newSongs = songs.stream().filter(s -> !existing.contains(s.getVideoId())).collect(Collectors.toList());
-                for (int i = newSongs.size() - 1; i >= 0; i--) group.getSongs().add(0, newSongs.get(i));
+                group.getSongs().addAll(newSongs);
                 refreshBtn.setDisable(false); refreshBtn.setText(original);
                 int added = newSongs.size();
                 showToast(added > 0
@@ -1590,7 +1788,14 @@ public class MainController implements Initializable {
             menu.getItems().add(new SeparatorMenuItem());
             groups.forEach(g -> {
                 MenuItem item = new MenuItem((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName());
-                item.setOnAction(ev -> { libraryService.addSongToGroup(song, g); refreshLibraryPanel(); showToast("Añadido a «" + g.getName() + "»"); });
+                item.setOnAction(ev -> {
+                    if (g.getSongs().stream().noneMatch(s -> s.getVideoId().equals(song.getVideoId()))) {
+                        song.setType(g.getType());
+                        g.getSongs().add(0, song);
+                        libraryService.save();
+                    }
+                    refreshLibraryPanel(); showToast("Añadido a «" + g.getName() + "»");
+                });
                 menu.getItems().add(item);
             });
         }
@@ -1708,9 +1913,13 @@ public class MainController implements Initializable {
         tick.run();
         Timeline timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> tick.run()));
         timer.setCycleCount(Animation.INDEFINITE);
-        quotaTracker.exhaustedProperty().addListener((obs, was, is) -> {
+        // Each home-panel refresh rebuilds this widget with a new Timeline; drop the
+        // previous listener first so they don't accumulate on quotaTracker indefinitely.
+        if (quotaExhaustedListener != null) quotaTracker.exhaustedProperty().removeListener(quotaExhaustedListener);
+        quotaExhaustedListener = (obs, was, is) -> {
             if (Boolean.TRUE.equals(is)) timer.play(); else timer.stop();
-        });
+        };
+        quotaTracker.exhaustedProperty().addListener(quotaExhaustedListener);
         if (quotaTracker.isExhausted()) timer.play();
         homeCarouselTimelines.add(timer);
 
@@ -1799,7 +2008,6 @@ public class MainController implements Initializable {
         imgView.setStyle("-fx-cursor: hand;");
         if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
             CardBuilder.loadImage(imgView, song.getThumbnailUrl());
-        imgView.setOnMouseClicked(e -> downloadAndPlay(song, null));
 
         Button unpinBtn = new Button("📌");
         unpinBtn.getStyleClass().add("home-overlay-btn");
@@ -1813,15 +2021,17 @@ public class MainController implements Initializable {
         imgContainer.getStyleClass().add("home-playlist-thumb");
         imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(1); ft.play(); });
         imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(0); ft.play(); });
+        imgContainer.setOnMouseClicked(e -> {
+            if (e.getTarget() instanceof Button) return;
+            if (e.getButton() == javafx.scene.input.MouseButton.MIDDLE) { openSongPaused(song, null); return; }
+            downloadAndPlay(song, null);
+        });
 
         Label titleLbl = new Label(song.getTitle());
         titleLbl.getStyleClass().add("home-playlist-name");
         titleLbl.setMaxWidth(160);
 
-        Label artistLbl = new Label(song.getArtist());
-        artistLbl.getStyleClass().add("home-playlist-count");
-
-        card.getChildren().addAll(imgContainer, titleLbl, artistLbl);
+        card.getChildren().addAll(imgContainer, titleLbl);
         return card;
     }
 
@@ -1860,6 +2070,154 @@ public class MainController implements Initializable {
             p != pi && p.isPlaying && !p.isMashupLinked &&
             (p.song == null || !"Ambiente".equals(p.song.getType())));
         return nonAmbientePlaying ? pi.volume * ambientDuckRatio : pi.volume;
+    }
+
+    private void changeAudioDir(Path newBaseDir) {
+        String saved = libraryService.loadAudioDir();
+        Path oldBaseDir = saved.isBlank()
+            ? PersistenceService.bardoBaseDir().resolve("audio")
+            : Path.of(saved);
+
+        if (oldBaseDir.equals(newBaseDir)) return;
+
+        // Recopilar rutas reconocidas en el hilo FX antes de ir al hilo de fondo
+        Set<String> recognizedPaths = new HashSet<>();
+        for (LibraryGroup group : libraryService.getGroups())
+            for (Song song : group.getSongs()) {
+                String fp = song.getLocalFilePath();
+                if (fp != null && !fp.isBlank()) recognizedPaths.add(fp);
+            }
+        for (Song pinned : libraryService.getPinnedSongs()) {
+            String fp = pinned.getLocalFilePath();
+            if (fp != null && !fp.isBlank()) recognizedPaths.add(fp);
+        }
+
+        // Solo mover archivos reconocidos que estén dentro de oldBaseDir
+        List<Path> toMove = new ArrayList<>();
+        for (String fp : recognizedPaths) {
+            try {
+                Path p = Path.of(fp);
+                if (p.startsWith(oldBaseDir) && Files.isRegularFile(p)) toMove.add(p);
+            } catch (Exception ignored) {}
+        }
+
+        // Detener reproductores con archivos en oldBaseDir para liberar handles (Windows)
+        for (PlayerInstance pi : new ArrayList<>(activePlayers)) {
+            if (pi.mediaPlayer == null || pi.song == null) continue;
+            String fp = pi.song.getLocalFilePath();
+            if (fp == null || fp.isBlank()) continue;
+            try { if (!Path.of(fp).startsWith(oldBaseDir)) continue; }
+            catch (Exception ignored) { continue; }
+            if (pi.fadeOutAnim  != null) { pi.fadeOutAnim.stop();  pi.fadeOutAnim  = null; }
+            if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
+            pi.mediaPlayer.stop();
+            pi.mediaPlayer.dispose();
+            pi.mediaPlayer = null;
+            pi.isPlaying   = false;
+            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+        }
+        updatePlayPauseButton();
+        pickBestFocusedPlayer();
+
+        // Diálogo de progreso
+        Dialog<Void> progressDlg = new Dialog<>();
+        progressDlg.initOwner(stage());
+        progressDlg.setTitle("Moviendo archivos");
+        progressDlg.getDialogPane().getStylesheets().addAll(stage().getScene().getStylesheets());
+        ProgressBar progressBar = new ProgressBar(toMove.isEmpty() ? ProgressBar.INDETERMINATE_PROGRESS : 0.0);
+        progressBar.setPrefWidth(380);
+        Label progressLbl = new Label(toMove.isEmpty() ? "Escaneando carpeta…"
+                                                       : "0 de " + toMove.size() + " archivos");
+        progressLbl.getStyleClass().add("greeting-sub");
+        VBox dlgBox = new VBox(10, progressLbl, progressBar);
+        dlgBox.setStyle("-fx-padding: 16 24;");
+        progressDlg.getDialogPane().setContent(dlgBox);
+        progressDlg.show();
+
+        int total = toMove.size();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // 1. Copiar archivos reconocidos → destino; eliminar original tras copia exitosa
+                if (!toMove.isEmpty()) {
+                    Files.createDirectories(newBaseDir);
+                    for (int i = 0; i < total; i++) {
+                        Path src = toMove.get(i);
+                        Path dst = newBaseDir.resolve(oldBaseDir.relativize(src));
+                        try {
+                            Files.createDirectories(dst.getParent());
+                            Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+                            Files.delete(src);
+                        } catch (IOException ignored) {}
+                        final int done = i + 1;
+                        Platform.runLater(() -> {
+                            progressBar.setProgress((double) done / total);
+                            progressLbl.setText(done + " de " + total + " archivos movidos");
+                        });
+                    }
+                    // Eliminar subdirectorios vacíos creados por la app en oldBaseDir
+                    if (Files.isDirectory(oldBaseDir)) {
+                        try (var walk = Files.walk(oldBaseDir)) {
+                            walk.sorted(Comparator.<Path>reverseOrder())
+                                .filter(p -> Files.isDirectory(p) && !p.equals(oldBaseDir))
+                                .forEach(p -> {
+                                    try (var ls = Files.list(p)) {
+                                        if (ls.findAny().isEmpty()) Files.delete(p);
+                                    } catch (IOException ignored) {}
+                                });
+                        } catch (IOException ignored) {}
+                    }
+                }
+
+                // 2. Guardar nueva ruta
+                libraryService.saveAudioDir(newBaseDir.toString());
+
+                // 3. Escanear carpeta destino (reconoce archivos preexistentes)
+                Platform.runLater(() -> progressLbl.setText("Escaneando carpeta nueva…"));
+                Map<String, Path> videoIdToFile = new HashMap<>();
+                if (Files.isDirectory(newBaseDir)) {
+                    try (var walk = Files.walk(newBaseDir)) {
+                        walk.filter(Files::isRegularFile).forEach(p -> {
+                            String name = p.getFileName().toString();
+                            int dot = name.indexOf('.');
+                            if (dot > 0) videoIdToFile.put(name.substring(0, dot), p);
+                        });
+                    }
+                }
+
+                // 4 & 5. Actualizar rutas y guardar en el hilo FX
+                Platform.runLater(() -> {
+                    progressBar.setProgress(1.0);
+                    for (LibraryGroup group : libraryService.getGroups()) {
+                        Path groupDir = newBaseDir.resolve(group.getId());
+                        for (Song song : group.getSongs()) {
+                            Path found = videoIdToFile.get(song.getVideoId());
+                            if (found == null && Files.isDirectory(groupDir)) {
+                                String vid = song.getVideoId();
+                                try (var ls = Files.list(groupDir)) {
+                                    found = ls.filter(p -> p.getFileName().toString().startsWith(vid + "."))
+                                               .findFirst().orElse(null);
+                                } catch (IOException ignored) {}
+                            }
+                            if (found != null) song.setLocalFilePath(found.toString());
+                        }
+                    }
+                    for (Song pinned : libraryService.getPinnedSongs()) {
+                        Path found = videoIdToFile.get(pinned.getVideoId());
+                        if (found != null) pinned.setLocalFilePath(found.toString());
+                    }
+                    libraryService.save();
+                    refreshLibraryPanel();
+                    progressDlg.close();
+                    showToast("Carpeta de música actualizada.");
+                });
+            } catch (Exception e) {
+                Platform.runLater(() -> {
+                    progressDlg.close();
+                    showToast("Error al mover archivos: " + e.getMessage());
+                });
+            }
+        });
     }
 
     private void applyVolumesToAll() {

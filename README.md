@@ -1,4 +1,4 @@
-# Bardo v0.3.0-alpha
+# Bardo v0.4.0-alpha
 
 Reproductor de música de escritorio construido con JavaFX 21. Combina biblioteca local, reproducción multicanal simultánea, integración con YouTube y un modo Mashup para mezclar dos canciones en tiempo real.
 
@@ -27,6 +27,9 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
 - **Tema completamente personalizable** — todos los colores de la interfaz se configuran desde *Configuración → Apariencia*; cada variable tiene un selector de modo (estático / color primario de canción / color secundario de canción) y un botón de reset individual al color por defecto
 - **Contraste de texto automático (WCAG)** — cuando el ratio de contraste texto/fondo cae por debajo del umbral 3.0, se aplica una sombra suave alrededor del texto para garantizar la legibilidad con cualquier combinación de colores
 - **Contador de cuota YouTube API** — barra de progreso en la pantalla de inicio que muestra el consumo diario estimado de unidades (búsqueda = 100 unidades, resto = 1). Al alcanzar el límite: notificación toast, bloqueo de llamadas API y cuenta atrás hasta la medianoche (hora del Pacífico). El límite (por defecto 1 000 unidades/día) es configurable desde *Configuración*; las claves de desarrollador tienen el límite forzado a 1 000 y no pueden desactivarlo
+- **Carpeta de música configurable** — desde *Configuración* puedes cambiar dónde se guardan las canciones descargadas; los archivos existentes se migran automáticamente a la nueva ubicación
+- **Gestión de descargas** — pantalla "Ver descargas" con búsqueda, orden (por fecha/tamaño) y filtro por playlist; permite eliminar canciones descargadas para liberar espacio. Optimizada para bibliotecas grandes: carga los tamaños en segundo plano y usa una lista virtualizada
+- **Delimitadores de bucle (A/B)** — arrastra dos marcadores sobre la barra de progreso/espectrograma de una canción para repetir en bucle solo ese fragmento
 
 ---
 
