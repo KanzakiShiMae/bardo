@@ -14,16 +14,18 @@ import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
-import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.stage.DirectoryChooser;
+import javafx.stage.Stage;
+import javafx.stage.Window;
 import javafx.util.Duration;
 
 import java.io.File;
 import java.nio.file.*;
-import java.text.Normalizer;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.DoubleConsumer;
 import java.util.stream.Collectors;
@@ -417,12 +419,30 @@ public final class SettingsPanelBuilder {
 
     // ── Downloads dialog ──────────────────────────────────────────────────────
 
-    private static void showDownloadsDialog(VBox settingsPanel,
-                                             LibraryService libraryService,
-                                             SpectrogramService spectrogramService) {
-        Path spgDir = PersistenceService.bardoBaseDir().resolve("spectrograms");
+    /** Fila mutable de la lista de descargas; reutilizada entre celdas del {@link ListView} virtualizado. */
+    private static final class DownloadRow {
+        final String path; final long bytes; final String sizeStr;
+        final String title; final String thumbnailUrl;
+        final String normTitle; final int insertOrder; final Set<String> groupIds;
+        boolean selected;
 
-        // ── Collect data ──────────────────────────────────────────────────────
+        DownloadRow(String path, long bytes, String sizeStr, String title, String thumbnailUrl,
+                    String normTitle, int insertOrder, Set<String> groupIds) {
+            this.path = path; this.bytes = bytes; this.sizeStr = sizeStr;
+            this.title = title; this.thumbnailUrl = thumbnailUrl;
+            this.normTitle = normTitle; this.insertOrder = insertOrder; this.groupIds = groupIds;
+        }
+    }
+
+    private record DownloadScanResult(LinkedHashMap<String, Song> byPath,
+                                       HashMap<String, List<Song>> allByPath,
+                                       LinkedHashMap<String, String> groupNames,
+                                       List<DownloadRow> rows) {}
+
+    /** Recorre la librería y calcula tamaños en disco. Llamado en un hilo de fondo: no toca nodos de UI. */
+    private static DownloadScanResult collectDownloadRows(LibraryService libraryService,
+                                                            SpectrogramService spectrogramService,
+                                                            Path spgDir) {
         LinkedHashMap<String, Song>     byPath       = new LinkedHashMap<>();
         HashMap<String, List<Song>>     allByPath    = new HashMap<>();
         HashMap<String, Set<String>>    pathToGroups = new HashMap<>();
@@ -443,23 +463,8 @@ public final class SettingsPanelBuilder {
             allByPath.computeIfAbsent(s.getLocalFilePath(), k -> new ArrayList<>()).add(s);
         }
 
-        // ── Dialog shell ──────────────────────────────────────────────────────
-        Dialog<Void> dlg = new Dialog<>();
-        dlg.setTitle("Canciones descargadas");
-        dlg.setResizable(true);
-        dlg.initOwner(settingsPanel.getScene().getWindow());
-        if (settingsPanel.getScene() != null)
-            dlg.getDialogPane().getStylesheets().addAll(settingsPanel.getScene().getStylesheets());
-
-        // ── Row record ────────────────────────────────────────────────────────
-        record Row(CheckBox check, String path, long bytes, HBox node,
-                   String normTitle, int insertOrder, Set<String> groupIds) {}
-
-        List<Row> allRows = new ArrayList<>();
-        Label totalLbl = new Label();
-        totalLbl.getStyleClass().add("greeting-sub");
-
-        int[] idx = {0};
+        List<DownloadRow> rows = new ArrayList<>();
+        int idx = 0;
         for (Map.Entry<String, Song> e : byPath.entrySet()) {
             String fp = e.getKey();
             Song   s  = e.getValue();
@@ -469,88 +474,154 @@ public final class SettingsPanelBuilder {
             String sid = spectrogramService.getSongId(s);
             if (sid != null) try { spgB = Files.size(spgDir.resolve(sid + ".spg")); } catch (Exception ignored) {}
             long totalBytes = ab + spgB;
-
-            CheckBox chk = new CheckBox();
-
-            Node thumb;
-            if (s.getThumbnailUrl() != null && !s.getThumbnailUrl().isBlank()) {
-                ImageView iv = new ImageView();
-                iv.setFitWidth(56); iv.setFitHeight(32); iv.setPreserveRatio(false);
-                try { iv.setImage(new Image(s.getThumbnailUrl(), 56, 32, false, true, true)); }
-                catch (Exception ignored) {}
-                thumb = iv;
-            } else {
-                Label ph = new Label("🎵");
-                ph.setStyle("-fx-font-size: 18px; -fx-min-width: 56px; -fx-alignment: center;");
-                thumb = ph;
-            }
-
-            Label nameLbl = new Label(s.getTitle());
-            nameLbl.getStyleClass().add("song-title");
-            HBox.setHgrow(nameLbl, Priority.ALWAYS);
-            nameLbl.setMaxWidth(Double.MAX_VALUE);
-
-            long finalAb = ab; long finalSpgB = spgB;
-            String sizeStr = formatBytes(finalAb) + (finalSpgB > 0 ? " + " + formatBytes(finalSpgB) + " spg" : "");
-            Label sizeLbl = new Label(sizeStr);
-            sizeLbl.getStyleClass().add("song-duration");
-            sizeLbl.setMinWidth(150);
-
-            HBox row = new HBox(10, chk, thumb, nameLbl, sizeLbl);
-            row.setAlignment(Pos.CENTER_LEFT);
-            row.setPadding(new Insets(4, 12, 4, 12));
-            row.getStyleClass().add("detail-song-row");
+            String sizeStr = formatBytes(ab) + (spgB > 0 ? " + " + formatBytes(spgB) + " spg" : "");
 
             Set<String> gids = pathToGroups.getOrDefault(fp, Set.of());
-            allRows.add(new Row(chk, fp, totalBytes, row, normalizeStr(s.getTitle()), idx[0]++, gids));
+            rows.add(new DownloadRow(fp, totalBytes, sizeStr, s.getTitle(), s.getThumbnailUrl(),
+                UIUtils.normalize(s.getTitle()), idx++, gids));
         }
+        return new DownloadScanResult(byPath, allByPath, groupNames, rows);
+    }
+
+    private static void showDownloadsDialog(VBox settingsPanel,
+                                             LibraryService libraryService,
+                                             SpectrogramService spectrogramService) {
+        Path spgDir = PersistenceService.bardoBaseDir().resolve("spectrograms");
+
+        // ── Dialog shell, shown immediately with a loading spinner while los tamaños se calculan
+        //    en segundo plano (Files.size() es I/O bloqueante; con muchas canciones congelaba la UI) ──
+        Dialog<Void> dlg = new Dialog<>();
+        dlg.setTitle("Canciones descargadas");
+        dlg.setResizable(true);
+        dlg.initOwner(settingsPanel.getScene().getWindow());
+        if (settingsPanel.getScene() != null)
+            dlg.getDialogPane().getStylesheets().addAll(settingsPanel.getScene().getStylesheets());
+
+        ProgressIndicator spinner = new ProgressIndicator();
+        spinner.setMaxSize(40, 40);
+        Label loadingLbl = new Label("Calculando tamaños…");
+        loadingLbl.getStyleClass().add("greeting-sub");
+        VBox loadingBox = new VBox(14, spinner, loadingLbl);
+        loadingBox.setAlignment(Pos.CENTER);
+        loadingBox.setPadding(new Insets(40));
+        dlg.getDialogPane().setContent(loadingBox);
+
+        CompletableFuture
+            .supplyAsync(() -> collectDownloadRows(libraryService, spectrogramService, spgDir))
+            .thenAccept(data -> Platform.runLater(() -> {
+                if (!dlg.isShowing()) return; // el usuario cerró el diálogo mientras cargaba
+                populateDownloadsDialog(dlg, libraryService, spectrogramService, spgDir, data);
+            }));
+
+        dlg.showAndWait();
+    }
+
+    private static void populateDownloadsDialog(Dialog<Void> dlg, LibraryService libraryService,
+                                                  SpectrogramService spectrogramService, Path spgDir,
+                                                  DownloadScanResult data) {
+        List<DownloadRow> allRows = data.rows();
+        Label totalLbl = new Label();
+        totalLbl.getStyleClass().add("greeting-sub");
+
+        Runnable updateTotal = () -> {
+            long sel = allRows.stream().filter(r -> r.selected).mapToLong(r -> r.bytes).sum();
+            long tot = allRows.stream().mapToLong(r -> r.bytes).sum();
+            totalLbl.setText(formatBytes(tot) + " total" +
+                (sel > 0 ? "  •  " + formatBytes(sel) + " seleccionado" : ""));
+        };
 
         // ── Filter / sort state ───────────────────────────────────────────────
         String[]    searchText = {""};
         String[]    sortMode   = {"ORDER_ASC"};
         Set<String> activeGrps = new HashSet<>();
 
-        VBox listBox = new VBox(2);
+        Label emptyLbl = new Label();
+        emptyLbl.getStyleClass().add("greeting-sub");
+        emptyLbl.setPadding(new Insets(12));
 
-        Runnable updateTotal = () -> {
-            long sel = allRows.stream().filter(r -> r.check().isSelected()).mapToLong(Row::bytes).sum();
-            long tot = allRows.stream().mapToLong(Row::bytes).sum();
-            totalLbl.setText(formatBytes(tot) + " total" +
-                (sel > 0 ? "  •  " + formatBytes(sel) + " seleccionado" : ""));
-        };
-        allRows.forEach(r -> r.check().selectedProperty().addListener((obs, o, n) -> updateTotal.run()));
+        ListView<DownloadRow> listView = new ListView<>();
+        listView.setPlaceholder(emptyLbl);
+        listView.getStyleClass().add("results-scroll");
+        listView.setPrefHeight(380);
+        listView.setPrefWidth(680);
+        listView.setCellFactory(lv -> new ListCell<>() {
+            private final CheckBox chk = new CheckBox();
+            private final ImageView thumbIv = new ImageView();
+            private final Label thumbPh = new Label("🎵");
+            private final StackPane thumbStack = new StackPane(thumbIv, thumbPh);
+            private final Label nameLbl = new Label();
+            private final Label sizeLbl = new Label();
+            private final HBox row = new HBox(10, chk, thumbStack, nameLbl, sizeLbl);
+            {
+                thumbIv.setFitWidth(56); thumbIv.setFitHeight(32); thumbIv.setPreserveRatio(false);
+                thumbPh.setStyle("-fx-font-size: 18px; -fx-min-width: 56px; -fx-alignment: center;");
+                nameLbl.getStyleClass().add("song-title");
+                HBox.setHgrow(nameLbl, Priority.ALWAYS);
+                nameLbl.setMaxWidth(Double.MAX_VALUE);
+                sizeLbl.getStyleClass().add("song-duration");
+                sizeLbl.setMinWidth(150);
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setPadding(new Insets(4, 12, 4, 12));
+                row.getStyleClass().add("detail-song-row");
+                // Evita que el ListView resalte la fila al clicar fuera del checkbox: el "seleccionado"
+                // visual lo controla únicamente el checkbox, no la selección nativa de la celda.
+                // e.getTarget() es el nodo interno del skin (p.ej. el indicador del checkbox), no el
+                // CheckBox en sí, así que hay que comprobar si el checkbox está entre sus ancestros.
+                row.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+                    Node t = e.getTarget() instanceof Node n ? n : null;
+                    while (t != null && t != chk && t != row) t = t.getParent();
+                    if (t != chk) e.consume();
+                });
+                chk.setOnAction(e -> {
+                    DownloadRow item = getItem();
+                    if (item != null) { item.selected = chk.isSelected(); updateTotal.run(); }
+                });
+                setText(null);
+            }
+            @Override protected void updateItem(DownloadRow item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) { setGraphic(null); return; }
+                chk.setSelected(item.selected);
+                boolean hasThumb = item.thumbnailUrl != null && !item.thumbnailUrl.isBlank();
+                thumbIv.setVisible(hasThumb); thumbIv.setManaged(hasThumb);
+                thumbPh.setVisible(!hasThumb); thumbPh.setManaged(!hasThumb);
+                if (hasThumb) CardBuilder.loadImage(thumbIv, item.thumbnailUrl);
+                nameLbl.setText(item.title);
+                sizeLbl.setText(item.sizeStr);
+                setGraphic(row);
+            }
+        });
 
         Runnable refresh = () -> {
-            String q = normalizeStr(searchText[0]);
-            Comparator<Row> cmp = switch (sortMode[0]) {
-                case "ORDER_DESC" -> Comparator.<Row>comparingInt(Row::insertOrder).reversed();
-                case "SIZE_ASC"   -> Comparator.comparingLong(Row::bytes);
-                case "SIZE_DESC"  -> Comparator.<Row>comparingLong(Row::bytes).reversed();
-                default           -> Comparator.comparingInt(Row::insertOrder);
+            String q = UIUtils.normalize(searchText[0]);
+            Comparator<DownloadRow> cmp = switch (sortMode[0]) {
+                case "ORDER_DESC" -> Comparator.<DownloadRow>comparingInt(r -> r.insertOrder).reversed();
+                case "SIZE_ASC"   -> Comparator.<DownloadRow>comparingLong(r -> r.bytes);
+                case "SIZE_DESC"  -> Comparator.<DownloadRow>comparingLong(r -> r.bytes).reversed();
+                default           -> Comparator.comparingInt(r -> r.insertOrder);
             };
-            List<Node> nodes = allRows.stream()
-                .filter(r -> q.isBlank() || r.normTitle().contains(q))
-                .filter(r -> activeGrps.isEmpty() || r.groupIds().stream().anyMatch(activeGrps::contains))
+            List<DownloadRow> filtered = allRows.stream()
+                .filter(r -> q.isBlank() || r.normTitle.contains(q))
+                .filter(r -> activeGrps.isEmpty() || r.groupIds.stream().anyMatch(activeGrps::contains))
                 .sorted(cmp)
-                .map(Row::node)
                 .collect(Collectors.toList());
-            if (nodes.isEmpty()) {
-                Label empty = new Label(allRows.isEmpty() ? "No hay canciones descargadas." : "Sin resultados.");
-                empty.getStyleClass().add("greeting-sub");
-                empty.setPadding(new Insets(12));
-                listBox.getChildren().setAll(empty);
-            } else {
-                listBox.getChildren().setAll(nodes);
-            }
+            emptyLbl.setText(allRows.isEmpty() ? "No hay canciones descargadas." : "Sin resultados.");
+            listView.getItems().setAll(filtered);
             updateTotal.run();
         };
 
-        // ── Toolbar: search + sort ────────────────────────────────────────────
+        // ── Toolbar: search (con debounce ~200ms) + sort ─────────────────────
         TextField searchFld = new TextField();
         searchFld.setPromptText("Buscar…");
         searchFld.getStyleClass().add("detail-search-field");
         HBox.setHgrow(searchFld, Priority.ALWAYS);
-        searchFld.textProperty().addListener((obs, o, n) -> { searchText[0] = n; refresh.run(); });
+        PauseTransition searchDebounce = new PauseTransition(Duration.millis(200));
+        searchDebounce.setOnFinished(e -> refresh.run());
+        searchFld.textProperty().addListener((obs, o, n) -> {
+            searchText[0] = n;
+            searchDebounce.stop();
+            searchDebounce.playFromStart();
+        });
 
         ComboBox<String> sortBox = new ComboBox<>(FXCollections.observableArrayList(
             "Más antiguo primero", "Más nuevo primero", "Menor tamaño", "Mayor tamaño"));
@@ -573,10 +644,10 @@ public final class SettingsPanelBuilder {
         FlowPane chipsPane = new FlowPane(6, 6);
         chipsPane.setPadding(new Insets(0, 12, 8, 12));
 
-        for (Map.Entry<String, String> ge : groupNames.entrySet()) {
+        for (Map.Entry<String, String> ge : data.groupNames().entrySet()) {
             String gid  = ge.getKey();
             String name = ge.getValue();
-            if (allRows.stream().noneMatch(r -> r.groupIds().contains(gid))) continue;
+            if (allRows.stream().noneMatch(r -> r.groupIds.contains(gid))) continue;
 
             Button chip = new Button(name);
             chip.getStyleClass().add("toggle-btn");
@@ -593,36 +664,31 @@ public final class SettingsPanelBuilder {
             ? new VBox(0, toolbar)
             : new VBox(0, toolbar, chipsPane);
 
-        // ── Scroll list ───────────────────────────────────────────────────────
-        ScrollPane scroll = new ScrollPane(listBox);
-        scroll.setFitToWidth(true);
-        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
-        scroll.getStyleClass().add("results-scroll");
-        scroll.setPrefHeight(380);
-        scroll.setPrefWidth(680);
-
         // ── Bottom bar ────────────────────────────────────────────────────────
         CheckBox selectAll = new CheckBox("Seleccionar todo");
         selectAll.getStyleClass().add("greeting-sub");
-        selectAll.setOnAction(ev ->
-            allRows.forEach(r -> r.check().setSelected(selectAll.isSelected())));
+        selectAll.setOnAction(ev -> {
+            allRows.forEach(r -> r.selected = selectAll.isSelected());
+            listView.refresh();
+            updateTotal.run();
+        });
 
         Button deleteBtn = new Button("🗑  Eliminar seleccionadas");
         deleteBtn.getStyleClass().add("btn-primary");
         deleteBtn.setStyle("-fx-background-color: #c0392b;");
         deleteBtn.setOnAction(ev -> {
-            List<Row> toDelete = allRows.stream()
-                .filter(r -> r.check().isSelected()).collect(Collectors.toList());
+            List<DownloadRow> toDelete = allRows.stream()
+                .filter(r -> r.selected).collect(Collectors.toList());
             if (toDelete.isEmpty()) return;
-            for (Row r : toDelete) {
-                try { Files.deleteIfExists(Path.of(r.path())); } catch (Exception ignored) {}
-                Song s = byPath.get(r.path());
+            for (DownloadRow r : toDelete) {
+                try { Files.deleteIfExists(Path.of(r.path)); } catch (Exception ignored) {}
+                Song s = data.byPath().get(r.path);
                 if (s != null) {
                     String sid = spectrogramService.getSongId(s);
                     if (sid != null)
                         try { Files.deleteIfExists(spgDir.resolve(sid + ".spg")); } catch (Exception ignored) {}
                 }
-                allByPath.getOrDefault(r.path(), List.of()).forEach(song -> song.setLocalFilePath(""));
+                data.allByPath().getOrDefault(r.path, List.of()).forEach(song -> song.setLocalFilePath(""));
             }
             allRows.removeAll(toDelete);
             selectAll.setSelected(false);
@@ -637,24 +703,21 @@ public final class SettingsPanelBuilder {
         bottomBar.setAlignment(Pos.CENTER_LEFT);
         bottomBar.setPadding(new Insets(8, 12, 4, 12));
 
-        VBox content = new VBox(4, topBar, scroll, bottomBar);
+        VBox content = new VBox(4, topBar, listView, bottomBar);
         dlg.getDialogPane().setContent(content);
         dlg.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
 
         refresh.run();
-        dlg.showAndWait();
+        Platform.runLater(() -> {
+            Window w = dlg.getDialogPane().getScene().getWindow();
+            if (w instanceof Stage st) st.sizeToScene();
+        });
     }
 
     private static String formatBytes(long bytes) {
         if (bytes < 1024)             return bytes + " B";
         if (bytes < 1024 * 1024)      return String.format("%.1f KB", bytes / 1024.0);
         return String.format("%.1f MB", bytes / (1024.0 * 1024));
-    }
-
-    private static String normalizeStr(String s) {
-        if (s == null) return "";
-        String nfd = Normalizer.normalize(s, Normalizer.Form.NFD);
-        return nfd.replaceAll("\\p{InCombiningDiacriticalMarks}", "").toLowerCase();
     }
 
     private static Optional<Path> showDirPicker(VBox settingsPanel,
@@ -739,11 +802,11 @@ public final class SettingsPanelBuilder {
             File chosen = dc.showDialog(settingsPanel.getScene().getWindow());
             if (chosen != null) {
                 String chosenStr = chosen.getAbsolutePath();
-                boolean found = buttons.stream()
+                Optional<RadioButton> hit = buttons.stream()
                     .filter(rb -> rb.getUserData().toString().equals(chosenStr))
-                    .peek(rb -> rb.setSelected(true))
-                    .findFirst().isPresent();
-                if (!found) {
+                    .findFirst();
+                hit.ifPresent(rb -> rb.setSelected(true));
+                if (!hit.isPresent()) {
                     addRow.accept(chosenStr, false);
                     buttons.get(buttons.size() - 1).setSelected(true);
                     fit.run();

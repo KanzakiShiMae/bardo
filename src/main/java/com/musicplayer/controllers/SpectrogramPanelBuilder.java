@@ -38,7 +38,10 @@ public class SpectrogramPanelBuilder {
         final byte[][][] lastData = {null};
 
         Runnable updateFn = () -> {
-            if (!canvas.isVisible()) return;
+            // canvas.isVisible() es la propia propiedad del nodo: sigue siendo true aunque
+            // la pestaña (panel) esté oculta. Comprobamos también el panel para no ejecutar
+            // el bucle por píxel del espectrograma en pestañas en segundo plano.
+            if (!canvas.isVisible() || (player.panel != null && !player.panel.isVisible())) return;
             Color color = colorSupplier.get();
             if (service.hasCached(songId)) {
                 byte[][] data = service.load(songId);
@@ -55,9 +58,16 @@ public class SpectrogramPanelBuilder {
         };
         player.spectroRedraw = updateFn;
 
+        // Re-attaching (toggling the spectrogram off/on) must drop the previous pair of
+        // listeners first, otherwise they accumulate on the same canvas indefinitely.
+        if (player.spectroWidthListener  != null) canvas.widthProperty().removeListener(player.spectroWidthListener);
+        if (player.spectroHeightListener != null) canvas.heightProperty().removeListener(player.spectroHeightListener);
+
         // JavaFX clears canvas contents on every setWidth/setHeight call, so redraw after resize
-        canvas.widthProperty().addListener((obs, o, n)  -> { if (n.doubleValue() > 0) Platform.runLater(updateFn); });
-        canvas.heightProperty().addListener((obs, o, n) -> { if (n.doubleValue() > 0) Platform.runLater(updateFn); });
+        player.spectroWidthListener  = (obs, o, n) -> { if (n.doubleValue() > 0) Platform.runLater(updateFn); };
+        player.spectroHeightListener = (obs, o, n) -> { if (n.doubleValue() > 0) Platform.runLater(updateFn); };
+        canvas.widthProperty().addListener(player.spectroWidthListener);
+        canvas.heightProperty().addListener(player.spectroHeightListener);
 
         Timeline timer = new Timeline(new KeyFrame(Duration.millis(300), e -> updateFn.run()));
         timer.setCycleCount(Timeline.INDEFINITE);

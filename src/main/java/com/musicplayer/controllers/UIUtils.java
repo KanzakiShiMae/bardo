@@ -3,6 +3,7 @@ package com.musicplayer.controllers;
 import javafx.scene.Node;
 import java.awt.Desktop;
 import java.net.URI;
+import java.text.Normalizer;
 
 /**
  * Utilidades estáticas compartidas por los controladores.
@@ -30,6 +31,14 @@ public final class UIUtils {
     public static void toggleStyleClass(Node node, String cls, boolean on) {
         if (on) { if (!node.getStyleClass().contains(cls)) node.getStyleClass().add(cls); }
         else    { node.getStyleClass().remove(cls); }
+    }
+
+    /** Strips diacritics and lowercases {@code s} for accent-insensitive search. */
+    public static String normalize(String s) {
+        if (s == null) return "";
+        return Normalizer.normalize(s, Normalizer.Form.NFD)
+            .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+            .toLowerCase();
     }
 
     /**

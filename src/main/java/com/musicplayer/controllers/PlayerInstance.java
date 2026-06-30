@@ -74,6 +74,12 @@ public class PlayerInstance {
     public Runnable spectroRedraw     = null;
     public Runnable onMarkersChanged  = null;
 
+    /** Width/height listeners attached by {@link SpectrogramPanelBuilder#attachToCanvas}, kept
+     *  here so a re-attach (toggling the spectrogram off/on) can remove the previous pair
+     *  instead of accumulating new ones on the same canvas. */
+    public javafx.beans.value.ChangeListener<Number> spectroWidthListener  = null;
+    public javafx.beans.value.ChangeListener<Number> spectroHeightListener = null;
+
     // ── Mashup pairing ─────────────────────────────────────────────────────────
     /** For Mashup players: the paired secondary player. Null for normal players. */
     public PlayerInstance mashupPartner  = null;

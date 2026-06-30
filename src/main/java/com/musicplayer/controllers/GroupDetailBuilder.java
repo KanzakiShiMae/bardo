@@ -15,7 +15,6 @@ import javafx.scene.image.*;
 import javafx.scene.layout.*;
 import javafx.util.Duration;
 
-import java.text.Normalizer;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -156,9 +155,9 @@ public final class GroupDetailBuilder {
         searchField.setPromptText("Buscar canción…");
         searchField.setPrefWidth(190);
         searchField.textProperty().addListener((obs, old, query) -> {
-            String q = normalize(query);
+            String q = UIUtils.normalize(query);
             filteredSongs.setPredicate(q.isEmpty() ? null
-                : s -> normalize(s.getTitle()).contains(q));
+                : s -> UIUtils.normalize(s.getTitle()).contains(q));
         });
 
         Label searchIcon = new Label("🔍");
@@ -529,13 +528,6 @@ public final class GroupDetailBuilder {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private static String normalize(String s) {
-        if (s == null) return "";
-        return Normalizer.normalize(s, Normalizer.Form.NFD)
-            .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
-            .toLowerCase();
-    }
 
     private static ScrollBar verticalScrollBar(ListView<?> list) {
         for (javafx.scene.Node n : list.lookupAll(".scroll-bar"))

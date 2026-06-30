@@ -107,6 +107,11 @@ public class ThemeManager {
     private AnimationTimer colorFadeTimer;
     private PauseTransition themeSavePause;
 
+    /** Thumbnail URL currently being processed by the color extractor thread, or
+     *  {@code null}; prevents spawning duplicate extractor threads for the same
+     *  thumbnail when play/pause/focus events fire in quick succession. */
+    private volatile String inFlightThumbUrl;
+
     // ── Dependencias ──────────────────────────────────────────────────────────
 
     private final LibraryService           libraryService;
@@ -268,12 +273,15 @@ public class ThemeManager {
             fadeAllToBase(); return;
         }
         final String thumbUrl = pi.song.getThumbnailUrl();
+        if (thumbUrl.equals(inFlightThumbUrl)) return; // already extracting this thumbnail
+        inFlightThumbUrl = thumbUrl;
         final PlayerInstance captured = pi;
         Thread extractor = new Thread(() -> {
             try {
                 Image img = new Image(thumbUrl, 128, 128, false, true);
-                List<Color> colors = img.isError() ? List.of() : extractDominantColors(img, 2);
+                List<Color> colors = img.isError() ? List.of() : extractDominantColors(img, 18);
                 Platform.runLater(() -> {
+                    if (thumbUrl.equals(inFlightThumbUrl)) inFlightThumbUrl = null;
                     PlayerInstance curr = focusedPlayerSupplier.get();
                     if (curr != captured) return;
                     if (!curr.isPlaying) { fadeAllToBase(); return; }
@@ -281,7 +289,10 @@ public class ThemeManager {
                     applyDynamicColors(colors);
                 });
             } catch (Exception e) {
-                Platform.runLater(this::fadeAllToBase);
+                Platform.runLater(() -> {
+                    if (thumbUrl.equals(inFlightThumbUrl)) inFlightThumbUrl = null;
+                    fadeAllToBase();
+                });
             }
         }, "bardo-color-extractor");
         extractor.setDaemon(true);
@@ -375,14 +386,29 @@ public class ThemeManager {
     }
 
     private void applyDynamicColors(List<Color> colors) {
+        Color primary   = colors.isEmpty() ? null : colors.get(0);
+        Color secondary = resolveSecondary(colors);
         for (String[] tv : THEME_VARS) {
             String varName = tv[0];
             String mode = themeVarModes.getOrDefault(varName, DYN_STATIC);
             if (DYN_STATIC.equals(mode)) continue;
-            int idx = DYN_PRIMARY.equals(mode) ? 0 : 1;
-            if (idx >= colors.size()) idx = 0;
-            fadeThemeVar(varName, colorToHex(colors.get(idx)));
+            Color c = DYN_PRIMARY.equals(mode) ? primary : secondary;
+            fadeThemeVar(varName, c != null ? colorToHex(c) : baseTheme.getOrDefault(varName, tv[1]));
         }
+    }
+
+    private static boolean isNearBlack(Color c) { return c.getBrightness() < 0.25; }
+
+    private static Color resolveSecondary(List<Color> colors) {
+        if (colors.isEmpty()) return null;
+        if (colors.size() < 2) return isNearBlack(colors.get(0)) ? Color.WHITE : colors.get(0);
+        Color secondary = colors.get(1);
+        if (!isNearBlack(colors.get(0)) || !isNearBlack(secondary)) return secondary;
+        // Primary y secondary son ambos near-black: buscar el primero no-near-black
+        for (int i = 2; i < colors.size(); i++) {
+            if (!isNearBlack(colors.get(i))) return colors.get(i);
+        }
+        return Color.WHITE;
     }
 
     // ── Utilidades estáticas ──────────────────────────────────────────────────
@@ -445,12 +471,22 @@ public class ThemeManager {
         if (img == null || img.isError() || img.getWidth() == 0) return List.of();
         var pr = img.getPixelReader();
         int w = (int) img.getWidth(), h = (int) img.getHeight();
+        // Near-black pixels get their own bucket (key=-1) so they don't contaminate
+        // the hue buckets of vivid colors (e.g. dark-red pixels would otherwise
+        // pull the red bucket's average toward black).
+        final int DARK_BUCKET = -1;
         Map<Integer, double[]> buckets = new HashMap<>();
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 Color c = pr.getColor(x, y);
-                if (c.getSaturation() < 0.2 || c.getBrightness() < 0.2 || c.getBrightness() > 0.92) continue;
-                int hb = (int) (c.getHue() / 20);
+                if (c.getBrightness() > 0.92 && c.getSaturation() < 0.15) continue; // near-white
+                int hb;
+                if (c.getBrightness() < 0.15) {
+                    hb = DARK_BUCKET;
+                } else {
+                    if (c.getSaturation() < 0.2) continue; // mid-gray
+                    hb = (int) (c.getHue() / 20);
+                }
                 buckets.computeIfAbsent(hb, k -> new double[4]);
                 double[] acc = buckets.get(hb);
                 acc[0] += c.getRed(); acc[1] += c.getGreen(); acc[2] += c.getBlue(); acc[3]++;
@@ -464,13 +500,16 @@ public class ThemeManager {
         for (Map.Entry<Integer, double[]> e : entries) {
             int hb = e.getKey();
             boolean tooClose = usedHueBuckets.stream().anyMatch(u -> {
+                // DARK_BUCKET has no hue; only conflicts with itself
+                if (hb == DARK_BUCKET || u == DARK_BUCKET) return hb == u;
                 int d = Math.abs(hb - u); return Math.min(d, 18 - d) < 3;
             });
             if (tooClose) continue;
             usedHueBuckets.add(hb);
             double[] acc = e.getValue(); double n = acc[3];
-            result.add(Color.color(
-                Math.min(1, acc[0] / n), Math.min(1, acc[1] / n), Math.min(1, acc[2] / n)));
+            Color candidate = Color.color(
+                Math.min(1, acc[0] / n), Math.min(1, acc[1] / n), Math.min(1, acc[2] / n));
+            result.add(candidate);
             if (result.size() >= count) break;
         }
         return result;

@@ -1,6 +1,7 @@
 package com.musicplayer.controllers;
 
 import javafx.scene.control.Button;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 
 /**
@@ -23,6 +24,10 @@ public class AppTab {
     public final boolean closeable;
     /** Botón de la barra lateral que se marca como activo al seleccionar la pestaña. */
     public final Button  sidebarBtn;
+
+    /** Nodo de la barra de pestañas asociado a esta pestaña; {@code null} hasta que se crea.
+     *  Se reutiliza entre refrescos de estilo en lugar de recrearse en cada cambio. */
+    public HBox barNode;
 
     public AppTab(String id, String icon, String title, VBox panel, boolean closeable, Button sidebarBtn) {
         this.id = id; this.icon = icon; this.title = title;

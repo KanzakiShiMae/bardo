@@ -161,6 +161,7 @@ public class MainController implements Initializable {
 
     private ResizeHelper     resizeHelper;
     private Timeline         globalProgressTimer;
+    private javafx.beans.value.ChangeListener<Boolean> quotaExhaustedListener;
     private PauseTransition  volumeSavePause;
     private javafx.stage.Popup toastPopup;
     private SequentialTransition toastAnim;
@@ -184,6 +185,18 @@ public class MainController implements Initializable {
     private final Map<String, double[]> loopMarkerMemory = new HashMap<>();
 
     private float[] miniWavePeaks = new float[32];
+
+    // Cached theme colors for drawWaveCanvas — rebuilt only on theme change
+    private String cachedWaveHexA, cachedWaveHexA2;
+    private Color  cachedWaveCa,   cachedWaveCa2;
+
+    // Cached gradients for drawWaveCanvas, one slot for the main panel canvases and one
+    // for the mini canvas — rebuilt only when width or colors change, not every frame.
+    private final LinearGradient[] cachedFillGrad   = new LinearGradient[2];
+    private final LinearGradient[] cachedLineGrad   = new LinearGradient[2];
+    private final double[]         cachedGradW      = {-1, -1};
+    private final String[]         cachedGradHexA   = new String[2];
+    private final String[]         cachedGradHexA2  = new String[2];
 
     // Tab drag-reorder state
     private AppTab  tabDragging;
@@ -541,7 +554,12 @@ public class MainController implements Initializable {
 
         if (tab.id.startsWith("player:") || tab.id.startsWith("mashup:")) {
             PlayerInstance pi = findPlayerInstance(tab.id);
-            if (pi != null) setFocusedPlayer(pi);
+            if (pi != null) {
+                setFocusedPlayer(pi);
+                // Redibujado inmediato del espectrograma: su ciclo de 300ms está gateado por
+                // visibilidad, así que al volver a la pestaña refrescamos ya en vez de esperar.
+                if (pi.spectroRedraw != null) pi.spectroRedraw.run();
+            }
         }
         updateMiniPlayerVisibility();
 
@@ -549,8 +567,6 @@ public class MainController implements Initializable {
         if (tab.sidebarBtn != null) tab.sidebarBtn.getStyleClass().add("nav-btn-active");
 
         rebuildTabBar();
-        FadeTransition ft = new FadeTransition(Duration.millis(150), tab.panel);
-        ft.setFromValue(0); ft.setToValue(1); ft.play();
     }
 
     private void closeTab(String id) {
@@ -587,11 +603,8 @@ public class MainController implements Initializable {
         if (!openTabs.isEmpty()) {
             if (tab == activeTab) {
                 // Navigate to the most recently visited tab still open
-                AppTab prev = null;
-                for (String hid : tabHistory) {
-                    prev = findTab(hid);
-                    if (prev != null) break;
-                }
+                AppTab prev = tabHistory.stream()
+                    .map(this::findTab).filter(Objects::nonNull).findFirst().orElse(null);
                 activateTab(prev != null ? prev : openTabs.get(Math.max(0, idx - 1)));
             } else {
                 rebuildTabBar();
@@ -601,40 +614,85 @@ public class MainController implements Initializable {
 
     private static final double TAB_WIDTH = 168;
 
+    /**
+     * Crea el nodo de la barra de pestañas para {@code tab} (estructura fija: layout,
+     * label, dot de "reproduciendo", botón de cierre, handlers de clic y arrastre).
+     * Se llama una sola vez por pestaña; los cambios posteriores de estado (activa,
+     * reproduciendo, título) se aplican con {@link #updateTabNodeStyle} sin recrear el nodo.
+     */
+    private HBox createTabNode(AppTab tab) {
+        HBox btn = new HBox(4); btn.getStyleClass().add("tab-btn");
+        btn.setAlignment(Pos.CENTER); btn.setPrefWidth(TAB_WIDTH); btn.setMinWidth(TAB_WIDTH); btn.setMaxWidth(TAB_WIDTH);
+
+        Label lbl = new Label(); lbl.getStyleClass().add("tab-label");
+        lbl.setMaxWidth(tab.closeable ? TAB_WIDTH - 48 : TAB_WIDTH - 20); lbl.setMinWidth(0);
+        HBox.setHgrow(lbl, Priority.ALWAYS);
+        btn.getChildren().add(lbl);
+
+        Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
+        dot.setManaged(false); dot.setVisible(false); // visibilidad real la fija updateTabNodeStyle
+        btn.getChildren().add(dot);
+
+        if (tab.closeable) {
+            Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
+            final String tid = tab.id; x.setOnAction(e -> { e.consume(); closeTab(tid); });
+            btn.getChildren().add(x);
+        }
+
+        btn.setUserData(tab);
+        btn.setOnMouseClicked(e -> {
+            if (tabJustDragged) { tabJustDragged = false; return; }
+            if      (e.getButton() == MouseButton.MIDDLE  && tab.closeable)                     closeTab(tab.id);
+            else if (e.getButton() == MouseButton.PRIMARY && !(e.getTarget() instanceof Button)) activateTab(tab);
+        });
+        setupTabDrag(btn, tab);
+        return btn;
+    }
+
+    /** Aplica al nodo ya existente de {@code tab} su estado actual (activa/reproduciendo/título). */
+    private void updateTabNodeStyle(AppTab tab) {
+        HBox btn = tab.barNode;
+        if (btn == null) return;
+        UIUtils.toggleStyleClass(btn, "tab-btn-active", tab == activeTab);
+
+        PlayerInstance tabPi = (tab.id.startsWith("player:") || tab.id.startsWith("mashup:"))
+            ? findPlayerInstance(tab.id) : null;
+        boolean playing = tabPi != null && tabPi.isPlaying;
+        UIUtils.toggleStyleClass(btn, "tab-btn-playing", playing);
+
+        Label lbl = (Label) btn.getChildren().get(0);
+        lbl.setText(tab.icon + "  " + tab.title);
+
+        Label dot = (Label) btn.getChildren().get(1);
+        dot.setVisible(playing); dot.setManaged(playing);
+    }
+
+    /**
+     * Sincroniza la barra de pestañas con {@code openTabs} de forma incremental:
+     * crea nodos solo para pestañas nuevas, quita los de pestañas cerradas, reordena
+     * si hace falta, y refresca el estilo de todas — sin recrear nodos que ya existen.
+     * Reemplaza el antiguo "clear + recrear todo" en cada apertura/cierre/cambio de estado.
+     */
     private void rebuildTabBar() {
-        tabBar.getChildren().clear();
-        for (AppTab tab : openTabs) {
-            HBox btn = new HBox(4); btn.getStyleClass().add("tab-btn");
-            if (tab == activeTab)   btn.getStyleClass().add("tab-btn-active");
-            btn.setAlignment(Pos.CENTER); btn.setPrefWidth(TAB_WIDTH); btn.setMinWidth(TAB_WIDTH); btn.setMaxWidth(TAB_WIDTH);
+        List<Node> children = tabBar.getChildren();
+        children.removeIf(n -> {
+            boolean keep = n.getUserData() instanceof AppTab t && openTabs.contains(t);
+            if (!keep && n.getUserData() instanceof AppTab removed) removed.barNode = null;
+            return !keep;
+        });
 
-            PlayerInstance tabPi = (tab.id.startsWith("player:") || tab.id.startsWith("mashup:"))
-                ? findPlayerInstance(tab.id) : null;
-            boolean playing = tabPi != null && tabPi.isPlaying;
-            if (playing) btn.getStyleClass().add("tab-btn-playing");
-
-            Label lbl = new Label(tab.icon + "  " + tab.title); lbl.getStyleClass().add("tab-label");
-            lbl.setMaxWidth(tab.closeable ? TAB_WIDTH - 48 : TAB_WIDTH - 20); lbl.setMinWidth(0);
-            HBox.setHgrow(lbl, Priority.ALWAYS); btn.getChildren().add(lbl);
-
-            if (playing) {
-                Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
-                btn.getChildren().add(dot);
+        for (int i = 0; i < openTabs.size(); i++) {
+            AppTab tab = openTabs.get(i);
+            HBox node = tab.barNode;
+            if (node == null || !children.contains(node)) {
+                node = createTabNode(tab);
+                tab.barNode = node;
+                children.add(Math.min(i, children.size()), node);
+            } else {
+                int curIdx = children.indexOf(node);
+                if (curIdx != i) { children.remove(node); children.add(i, node); }
             }
-            if (tab.closeable) {
-                Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
-                final String tid = tab.id; x.setOnAction(e -> { e.consume(); closeTab(tid); });
-                btn.getChildren().add(x);
-            }
-            final AppTab t = tab;
-            btn.setUserData(tab);
-            btn.setOnMouseClicked(e -> {
-                if (tabJustDragged) { tabJustDragged = false; return; }
-                if      (e.getButton() == MouseButton.MIDDLE  && t.closeable)                       closeTab(t.id);
-                else if (e.getButton() == MouseButton.PRIMARY && !(e.getTarget() instanceof Button)) activateTab(t);
-            });
-            setupTabDrag(btn, tab);
-            tabBar.getChildren().add(btn);
+            updateTabNodeStyle(tab);
         }
         scrollActiveTabIntoView();
     }
@@ -768,7 +826,7 @@ public class MainController implements Initializable {
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
                 song.setLocalFilePath(path.toString());
-                if (song.getDuration() == null || song.getDuration().equals("—") || song.getDuration().isBlank()) {
+                if (!song.hasDuration()) {
                     try {
                         long ms = new MultimediaObject(path.toFile()).getInfo().getDuration();
                         if (ms > 0) song.setDuration(UIUtils.formatTime((int) (ms / 1000)));
@@ -917,7 +975,7 @@ public class MainController implements Initializable {
                     Platform.runLater(() -> {
                         if (pi.panelTotal != null) pi.panelTotal.setText(totalStr);
                         if (pi == focusedPlayer) timeTotal.setText(totalStr);
-                        if (song.getDuration() == null || song.getDuration().equals("—") || song.getDuration().isBlank()) {
+                        if (!song.hasDuration()) {
                             song.setDuration(totalStr);
                             libraryService.save();
                         }
@@ -966,7 +1024,10 @@ public class MainController implements Initializable {
                 if (!pending[0]) {
                     pending[0] = true;
                     Platform.runLater(() -> {
-                        drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
+                        // El canvas del panel solo es visible si su pestaña está activa;
+                        // dibujarlo cuando está oculta es trabajo desperdiciado.
+                        if (pi.panel != null && pi.panel.isVisible())
+                            drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
                         if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed, miniWavePeaks);
                         pending[0] = false;
                     });
@@ -1109,9 +1170,16 @@ public class MainController implements Initializable {
             }
             return;
         }
+        // El slider/tiempo del panel solo se ve con su pestaña activa; la barra inferior
+        // (Now Playing) solo refleja al reproductor con foco. Para pestañas en segundo plano
+        // sin foco no hay nada visible que actualizar — saltamos formatTime y los setters.
+        boolean panelVisible  = pi.panelProgress != null && !pi.seeking
+                                && pi.panel != null && pi.panel.isVisible();
+        boolean bottomVisible = pi == focusedPlayer && !seekingByUser;
+        if (!panelVisible && !bottomVisible) return;
         String elapsed = UIUtils.formatTime((int) current.toSeconds());
-        if (pi.panelProgress != null && !pi.seeking) { pi.panelProgress.setValue(pct); pi.panelElapsed.setText(elapsed); }
-        if (pi == focusedPlayer && !seekingByUser) { progressSlider.setValue(pct); timeElapsed.setText(elapsed); }
+        if (panelVisible)  { pi.panelProgress.setValue(pct); pi.panelElapsed.setText(elapsed); }
+        if (bottomVisible) { progressSlider.setValue(pct); timeElapsed.setText(elapsed); }
     }
 
     private void playPrevInInstance(PlayerInstance pi) {
@@ -1155,8 +1223,14 @@ public class MainController implements Initializable {
 
         String hexA  = themeManager.currentTheme.get("bardo-accent");
         String hexA2 = themeManager.currentTheme.get("bardo-accent2");
-        Color ca  = hexA  != null ? Color.web(hexA)  : Color.web("#f4a7b9");
-        Color ca2 = hexA2 != null ? Color.web(hexA2) : Color.web("#b39ddb");
+        if (!Objects.equals(hexA, cachedWaveHexA) || !Objects.equals(hexA2, cachedWaveHexA2)) {
+            cachedWaveHexA  = hexA;
+            cachedWaveHexA2 = hexA2;
+            cachedWaveCa    = hexA  != null ? Color.web(hexA)  : Color.web("#f4a7b9");
+            cachedWaveCa2   = hexA2 != null ? Color.web(hexA2) : Color.web("#b39ddb");
+        }
+        Color ca  = cachedWaveCa;
+        Color ca2 = cachedWaveCa2;
 
         if (isMini) {
             gc.setFill(Color.rgb(15, 5, 25, 0.35));
@@ -1185,12 +1259,21 @@ public class MainController implements Initializable {
         double lineAlpha = isMini ? 0.85 : 0.92;
         double lineWidth = isMini ? 1.5 : 2.0;
 
-        LinearGradient fillGrad = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
-            new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), fillAlpha)),
-            new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), fillAlpha)));
-        LinearGradient lineGrad = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
-            new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), lineAlpha)),
-            new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), lineAlpha)));
+        int slot = isMini ? 1 : 0;
+        if (cachedFillGrad[slot] == null || cachedGradW[slot] != w
+                || !Objects.equals(cachedGradHexA[slot], hexA) || !Objects.equals(cachedGradHexA2[slot], hexA2)) {
+            cachedGradW[slot]     = w;
+            cachedGradHexA[slot]  = hexA;
+            cachedGradHexA2[slot] = hexA2;
+            cachedFillGrad[slot] = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), fillAlpha)),
+                new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), fillAlpha)));
+            cachedLineGrad[slot] = new LinearGradient(0, 0, w, 0, false, CycleMethod.NO_CYCLE,
+                new Stop(0, Color.color(ca.getRed(), ca.getGreen(), ca.getBlue(), lineAlpha)),
+                new Stop(1, Color.color(ca2.getRed(), ca2.getGreen(), ca2.getBlue(), lineAlpha)));
+        }
+        LinearGradient fillGrad = cachedFillGrad[slot];
+        LinearGradient lineGrad = cachedLineGrad[slot];
 
         // Relleno superior (entre curva y línea central)
         gc.setFill(fillGrad);
@@ -1251,6 +1334,15 @@ public class MainController implements Initializable {
     private void startWaveDecay(PlayerInstance pi) {
         if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
         if (pi.waveSmoothed == null) return;
+        // Si nadie ve esta onda (pestaña oculta y reproductor sin foco), no animamos el
+        // decaimiento: aplanamos el array de una vez y dejamos el canvas plano con un solo
+        // dibujado, evitando ~30fps de trabajo inútil en segundo plano.
+        boolean panelVisible = pi.panel != null && pi.panel.isVisible();
+        if (!panelVisible && pi != focusedPlayer) {
+            Arrays.fill(pi.waveSmoothed, 0f);
+            if (pi.panelWaveCanvas != null) drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
+            return;
+        }
         pi.waveDecayAnim = new Timeline(new KeyFrame(Duration.millis(33), e -> {
             if (pi.waveSmoothed == null) { pi.waveDecayAnim.stop(); return; }
             boolean allZero = true;
@@ -1258,7 +1350,8 @@ public class MainController implements Initializable {
                 pi.waveSmoothed[i] *= 0.82f;
                 if (pi.waveSmoothed[i] > 0.004f) allZero = false;
             }
-            drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
+            if (pi.panel != null && pi.panel.isVisible())
+                drawWaveCanvas(pi.panelWaveCanvas, pi.waveSmoothed, pi.wavePeaks);
             if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, pi.waveSmoothed, miniWavePeaks);
             if (allZero) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
         }));
@@ -1623,7 +1716,7 @@ public class MainController implements Initializable {
                     .collect(Collectors.toMap(Song::getVideoId, s -> s, (a, b) -> a));
                 group.getSongs().forEach(s -> {
                     Song f = fetchedMap.get(s.getVideoId());
-                    if (f != null && (s.getDuration() == null || s.getDuration().equals("—") || s.getDuration().isBlank()))
+                    if (f != null && !s.hasDuration())
                         s.setDuration(f.getDuration());
                 });
                 // Add truly new songs at the end
@@ -1820,9 +1913,13 @@ public class MainController implements Initializable {
         tick.run();
         Timeline timer = new Timeline(new KeyFrame(Duration.seconds(1), e -> tick.run()));
         timer.setCycleCount(Animation.INDEFINITE);
-        quotaTracker.exhaustedProperty().addListener((obs, was, is) -> {
+        // Each home-panel refresh rebuilds this widget with a new Timeline; drop the
+        // previous listener first so they don't accumulate on quotaTracker indefinitely.
+        if (quotaExhaustedListener != null) quotaTracker.exhaustedProperty().removeListener(quotaExhaustedListener);
+        quotaExhaustedListener = (obs, was, is) -> {
             if (Boolean.TRUE.equals(is)) timer.play(); else timer.stop();
-        });
+        };
+        quotaTracker.exhaustedProperty().addListener(quotaExhaustedListener);
         if (quotaTracker.isExhausted()) timer.play();
         homeCarouselTimelines.add(timer);
 
@@ -2035,10 +2132,6 @@ public class MainController implements Initializable {
         VBox dlgBox = new VBox(10, progressLbl, progressBar);
         dlgBox.setStyle("-fx-padding: 16 24;");
         progressDlg.getDialogPane().setContent(dlgBox);
-        progressDlg.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        Node closeNode = progressDlg.getDialogPane().lookupButton(ButtonType.CLOSE);
-        closeNode.setVisible(false);
-        closeNode.setManaged(false);
         progressDlg.show();
 
         int total = toMove.size();
