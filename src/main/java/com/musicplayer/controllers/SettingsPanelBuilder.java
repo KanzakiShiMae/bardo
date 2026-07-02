@@ -24,6 +24,7 @@ import javafx.util.Duration;
 
 import java.io.File;
 import java.nio.file.*;
+import java.util.prefs.Preferences;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
@@ -282,6 +283,38 @@ public final class SettingsPanelBuilder {
         VBox downloadsSection = new VBox(8, downloadsSectionLbl, downloadsDescLbl, manageDownloadsBtn);
         Separator downloadsSep = new Separator(); downloadsSep.setPadding(new Insets(8, 0, 8, 0));
 
+        // ── Sala Party ────────────────────────────────────────────────────────
+        Label partySectionLbl = new Label("SALA PARTY");
+        partySectionLbl.getStyleClass().add("sidebar-section-label");
+        Label partyTunnelDesc = new Label(
+            "Método de conexión que se usará automáticamente al crear una sala Party.");
+        partyTunnelDesc.setWrapText(true); partyTunnelDesc.getStyleClass().add("greeting-sub");
+
+        Preferences partyPrefs = Preferences.userNodeForPackage(PartyPanelBuilder.class);
+        String savedTunnelMode = partyPrefs.get("party.tunnel.mode", "upnp");
+
+        ComboBox<String> tunnelModeBox = new ComboBox<>(FXCollections.observableArrayList(
+            "UPnP (automático)",
+            "Serveo.net (túnel SSH)",
+            "bore.pub (descarga ~3 MB)"
+        ));
+        tunnelModeBox.setValue(switch (savedTunnelMode) {
+            case "serveo" -> "Serveo.net (túnel SSH)";
+            case "bore"   -> "bore.pub (descarga ~3 MB)";
+            default       -> "UPnP (automático)";
+        });
+        tunnelModeBox.setOnAction(e -> {
+            String mode = switch (tunnelModeBox.getValue()) {
+                case "Serveo.net (túnel SSH)"    -> "serveo";
+                case "bore.pub (descarga ~3 MB)" -> "bore";
+                default                          -> "upnp";
+            };
+            partyPrefs.put("party.tunnel.mode", mode);
+        });
+
+        VBox partySection = new VBox(8, partySectionLbl, partyTunnelDesc, tunnelModeBox);
+        Separator partySep = new Separator(); partySep.setPadding(new Insets(8, 0, 8, 0));
+
         // ── Apariencia ────────────────────────────────────────────────────────
         Label appearanceSectionLbl = new Label("APARIENCIA");
         appearanceSectionLbl.getStyleClass().add("sidebar-section-label");
@@ -405,7 +438,8 @@ public final class SettingsPanelBuilder {
 
         VBox scrollContent = new VBox(24, header, section, settingsSep, apiSection,
             quotaSep, quotaSection, musicDirSep, musicDirSection,
-            downloadsSep, downloadsSection, appearanceSep, appearanceSection);
+            downloadsSep, downloadsSection, partySep, partySection,
+            appearanceSep, appearanceSection);
         scrollContent.setPadding(new Insets(28, 28, 28, 28));
 
         ScrollPane settingsScroll = new ScrollPane(scrollContent);

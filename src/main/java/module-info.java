@@ -9,6 +9,8 @@ module com.musicplayer {
     requires TarsosDSP.core;
     requires TarsosDSP.jvm;
     requires jave.core;
+    requires weupnp;
+    requires java.prefs;
 
     opens com.musicplayer to javafx.fxml;
     opens com.musicplayer.controllers to javafx.fxml;

@@ -118,7 +118,7 @@ public class MainController implements Initializable {
     @FXML private ImageView        sidebarLogoBorder;
     @FXML private javafx.scene.layout.StackPane sidebarLogoStack;
     @FXML private VBox             sidebar;
-    @FXML private Button           btnHome, btnLibrary, btnSettings, btnNewGroup;
+    @FXML private Button           btnHome, btnLibrary, btnSettings, btnNewGroup, btnParty;
     @FXML private ListView<String> groupListView;
 
     @FXML private ScrollPane tabBarScroll;
@@ -178,6 +178,7 @@ public class MainController implements Initializable {
     private final ArrayDeque<String>   tabHistory     = new ArrayDeque<>();
     private AppTab         activeTab;
     private PlayerInstance focusedPlayer;
+    private PartyPanelBuilder partyPanelBuilder;
 
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
@@ -349,12 +350,17 @@ public class MainController implements Initializable {
     // ── Setup ─────────────────────────────────────────────────────────────────
 
     private void setupTitleBar() {
-        btnClose.setOnAction(e -> {
-            if (globalProgressTimer != null) globalProgressTimer.stop();
-            activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
-            spectrogramService.shutdown();
-            Platform.exit();
+        btnClose.setOnAction(e -> closeApp());
+
+        // Alt+F4 / cierre del sistema en ventana UNDECORATED → mismo handler
+        btnClose.sceneProperty().addListener((obs, o, scene) -> {
+            if (scene == null) return;
+            scene.windowProperty().addListener((obs2, o2, win) -> {
+                if (win instanceof javafx.stage.Stage s)
+                    s.setOnCloseRequest(ev -> closeApp());
+            });
         });
+
         btnMinimize.setOnAction(e -> stage().setIconified(true));
         btnMaximize.setOnAction(e -> {
             javafx.stage.Stage st = stage();
@@ -364,6 +370,14 @@ public class MainController implements Initializable {
                 st.setMaximized(!st.isMaximized());
             }
         });
+    }
+
+    private void closeApp() {
+        if (globalProgressTimer != null) globalProgressTimer.stop();
+        activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
+        spectrogramService.shutdown();
+        if (partyPanelBuilder != null) partyPanelBuilder.shutdown();
+        Platform.exit();
     }
 
     /** Obtiene el {@code Stage} principal a partir de cualquier nodo ya adjunto. */
@@ -504,6 +518,14 @@ public class MainController implements Initializable {
         btnHome.setOnAction(e     -> { refreshHomePanel(); openTab("home", "🏠", "Inicio", homePanel, true, btnHome); });
         btnLibrary.setOnAction(e  -> { refreshLibraryPanel(); openTab("library", "📚", "Biblioteca",   libraryPanel,  true, btnLibrary); });
         btnSettings.setOnAction(e -> openTab("settings", "⚙",  "Configuración", settingsPanel, true, btnSettings));
+        partyPanelBuilder = new PartyPanelBuilder(this, downloadService);
+        btnParty.setOnAction(e -> openTab("party", "🎧", "Party", partyPanelBuilder.getPanel(), true, btnParty));
+
+        // ── DEBUG: abre dos ventanas de Party (master + listener) ─────────────
+        Button debugPartyBtn = new Button("🔧 DEBUG Party");
+        debugPartyBtn.setStyle("-fx-background-color:#c0392b;-fx-text-fill:white;-fx-font-size:10px;-fx-padding:2 8;-fx-background-radius:4;");
+        debugPartyBtn.setOnAction(e -> openDebugPartyTabs());
+        titleBar.getChildren().add(titleBar.getChildren().size() - 1, debugPartyBtn);
 
         libraryService.getGroups().addListener(
             (javafx.collections.ListChangeListener<LibraryGroup>) c -> refreshSidebarList()
@@ -563,15 +585,20 @@ public class MainController implements Initializable {
         }
         updateMiniPlayerVisibility();
 
-        for (Button b : new Button[]{btnHome, btnLibrary, btnSettings}) b.getStyleClass().remove("nav-btn-active");
+        for (Button b : new Button[]{btnHome, btnLibrary, btnSettings, btnParty}) b.getStyleClass().remove("nav-btn-active");
         if (tab.sidebarBtn != null) tab.sidebarBtn.getStyleClass().add("nav-btn-active");
 
         rebuildTabBar();
     }
 
-    private void closeTab(String id) {
+    private void closeTab(String id) { doCloseTab(id, false); }
+
+    /** Cierra la pestaña incluso si {@code closeable == false} (uso exclusivo del sistema Party). */
+    void closeTabForced(String id) { doCloseTab(id, true); }
+
+    private void doCloseTab(String id, boolean force) {
         AppTab tab = findTab(id);
-        if (tab == null || !tab.closeable) return;
+        if (tab == null || (!force && !tab.closeable)) return;
         int idx = openTabs.indexOf(tab);
         openTabs.remove(tab);
         contentArea.getChildren().remove(tab.panel);
@@ -579,6 +606,8 @@ public class MainController implements Initializable {
         if (id.startsWith("player:") || id.startsWith("mashup:")) {
             PlayerInstance pi = findPlayerInstance(id);
             if (pi != null) {
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastCloseTrack(pi.song.getVideoId());
                 if (pi.mashupXfadeAnim != null) { pi.mashupXfadeAnim.stop(); pi.mashupXfadeAnim = null; }
                 if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
                 if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
@@ -632,6 +661,18 @@ public class MainController implements Initializable {
         Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
         dot.setManaged(false); dot.setVisible(false); // visibilidad real la fija updateTabNodeStyle
         btn.getChildren().add(dot);
+
+        if (tab.id.startsWith("player:") && partyPanelBuilder != null) {
+            Button partyBtn = new Button("📢"); partyBtn.getStyleClass().add("tab-close-btn");
+            partyBtn.visibleProperty().bind(partyPanelBuilder.isMasterProperty());
+            partyBtn.managedProperty().bind(partyPanelBuilder.isMasterProperty());
+            partyBtn.setOnAction(e -> {
+                e.consume();
+                PlayerInstance pi = findPlayerInstance(tab.id);
+                if (pi != null && pi.song != null) partyPanelBuilder.addSongToParty(pi.song);
+            });
+            btn.getChildren().add(partyBtn);
+        }
 
         if (tab.closeable) {
             Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
@@ -878,10 +919,21 @@ public class MainController implements Initializable {
             p -> navigateTab(-1),
             p -> navigateTab(+1),
             () -> toggleInlineSpectrogram(pi),
-            (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
-            p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
+            (p, pct) -> {
+                if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct);
+                applyVolumesToAll();
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastVolume(pi.song.getVideoId(), pct / 100.0);
+            },
+            p -> {
+                if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping);
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastLoop(pi.song.getVideoId(), p.looping);
+            }
         );
         themeManager.applyContrastStroke(pi.panel, "bardo-text", "bardo-player-bg1");
+        if (pi.isMasterPartyPlayer && partyPanelBuilder != null)
+            pi.onPartySeek = posMs -> { if (pi.song != null) partyPanelBuilder.masterBroadcastSeek(pi.song.getVideoId(), posMs); };
     }
 
     private void toggleInlineSpectrogram(PlayerInstance pi) {
@@ -1000,6 +1052,8 @@ public class MainController implements Initializable {
                                       ? tot.multiply(pi.loopInPct / 100.0) : Duration.ZERO;
                     pi.mediaPlayer.seek(seekTo);
                     pi.mediaPlayer.play();
+                    if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                        partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) seekTo.toMillis());
                 } else { onSongEnded(pi); }
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
@@ -1034,8 +1088,12 @@ public class MainController implements Initializable {
                 }
             });
 
-            pi.mediaPlayer.play();
-            pi.isPlaying = true;
+            if (pi.startPaused) {
+                pi.isPlaying = false;
+            } else {
+                pi.mediaPlayer.play();
+                pi.isPlaying = true;
+            }
             applyVolumesToAll();
             rebuildTabBar();
         } catch (Exception e) { showToast("No se puede reproducir: " + file.getName()); return; }
@@ -1043,7 +1101,7 @@ public class MainController implements Initializable {
         if (pi.panelTitle != null) {
             pi.panelTitle.setText(song.getTitle()); pi.panelArtist.setText(song.getArtist());
             pi.panelProgress.setValue(0); pi.panelElapsed.setText("0:00"); pi.panelTotal.setText("—");
-            pi.panelPlayPause.setText("⏸");
+            if (pi.panelPlayPause != null) pi.panelPlayPause.setText(pi.startPaused ? "▶" : "⏸");
         }
         if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
             try { Image thumb = new Image(song.getThumbnailUrl(), true); if (pi.artView != null) pi.artView.setImage(thumb); }
@@ -1051,7 +1109,7 @@ public class MainController implements Initializable {
         }
         AppTab existingTab = findTab(pi.tabId);
         if (existingTab != null) existingTab.title = song.getTitle();
-        openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, true, null);
+        openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, !pi.isPartyListener, null);
 
         setFocusedPlayer(pi);
         updateLoopButtons();
@@ -1075,7 +1133,11 @@ public class MainController implements Initializable {
             applyVolumesToAll();
             if (pi == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
             updatePlayPauseButton(); rebuildTabBar();
+            if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) pi.mediaPlayer.getCurrentTime().toMillis());
         } else {
+            if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                partyPanelBuilder.masterBroadcastPause(pi.song.getVideoId(), (long) pi.mediaPlayer.getCurrentTime().toMillis());
             fadeOutAndPause(pi);
         }
     }
@@ -1163,7 +1225,10 @@ public class MainController implements Initializable {
         double pct = (current.toSeconds() / total.toSeconds()) * 100;
         if (pi.loopMarkersActive && !pi.stoppedAtLoopOut && !pi.seeking && pi.loopOutPct < 100.0 && pct >= pi.loopOutPct) {
             if (pi.looping) {
-                pi.mediaPlayer.seek(total.multiply(pi.loopInPct / 100.0));
+                Duration seekTo = total.multiply(pi.loopInPct / 100.0);
+                pi.mediaPlayer.seek(seekTo);
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) seekTo.toMillis());
             } else {
                 pi.stoppedAtLoopOut = true;
                 fadeOutAndPause(pi);
@@ -1636,7 +1701,8 @@ public class MainController implements Initializable {
             (song, grp) -> downloadAndPlay(song, grp),
             (song, grp) -> openSongPaused(song, grp),
             songs -> openMashupPlayer(songs.get(0), songs.get(1)),
-            libraryService, this::showToast, this::refreshHomePanel);
+            libraryService, this::showToast, this::refreshHomePanel,
+            partyPanelBuilder.isMasterProperty(), partyPanelBuilder::addSongToParty);
         openTab(tabId, group.isYoutubePlaylist() ? "📺" : "📋", group.getName(), panel, true, btnLibrary);
         themeManager.applyContrastStroke(panel, "bardo-text", "bardo-bg");
     }
@@ -2230,7 +2296,7 @@ public class MainController implements Initializable {
 
     // ── Utils ─────────────────────────────────────────────────────────────────
 
-    private void showToast(String message) {
+    void showToast(String message) {
         Platform.runLater(() -> {
             if (toastAnim != null) { toastAnim.stop(); toastAnim = null; }
             if (toastPopup != null) toastPopup.hide();
@@ -2501,5 +2567,61 @@ public class MainController implements Initializable {
             default: r = bri; g = p;   b = q;   break;
         }
         return (alpha << 24) | ((int)(r * 255f) << 16) | ((int)(g * 255f) << 8) | (int)(b * 255f);
+    }
+
+    // ── API interna para el sistema Party ─────────────────────────────────────
+
+    PlayerInstance getFocusedPlayer() { return focusedPlayer; }
+
+    PlayerInstance partyLoadSong(Song song) {
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.isPartyListener = true;
+        pi.startPaused     = true;
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.add(song);
+        buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+        return pi;
+    }
+
+    PlayerInstance openMasterPartyPlayer(Song song) {
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.isMasterPartyPlayer = true;
+        pi.startPaused         = true;
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.add(song);
+        buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+        return pi;
+    }
+
+    void partyPlay(PlayerInstance pi) {
+        if (pi == null || pi.mediaPlayer == null) return;
+        pi.mediaPlayer.play();
+        pi.isPlaying = true;
+        if (pi == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
+        updatePlayPauseButton();
+        rebuildTabBar();
+    }
+
+    void partyPause(PlayerInstance pi) {
+        if (pi == null || pi.mediaPlayer == null) return;
+        pi.mediaPlayer.pause();
+        pi.isPlaying = false;
+        startWaveDecay(pi);
+        if (pi == focusedPlayer) removeGlowEffect();
+        updatePlayPauseButton();
+        rebuildTabBar();
+    }
+
+    private void openDebugPartyTabs() {
+        // El master usa el partyPanelBuilder principal: así isMasterProperty() y addSongToParty()
+        // funcionan correctamente y los botones 📢 de reproductores/playlists se activan.
+        openTab("debug-party-master", "📡", "DEBUG Master", partyPanelBuilder.getPanel(), true, null);
+
+        // El listener tiene su propio builder independiente
+        PartyPanelBuilder listenerBuilder = new PartyPanelBuilder(this, downloadService);
+        listenerBuilder.navigateToJoin();
+        openTab("debug-party-listener", "🔗", "DEBUG Listener", listenerBuilder.getPanel(), true, null);
     }
 }

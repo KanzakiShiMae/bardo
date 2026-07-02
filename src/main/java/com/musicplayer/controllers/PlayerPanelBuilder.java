@@ -93,8 +93,11 @@ public final class PlayerPanelBuilder {
             pi.seeking = false;
             if (pi.mediaPlayer != null) {
                 Duration total = pi.mediaPlayer.getMedia().getDuration();
-                if (total != null && total.greaterThan(Duration.ZERO))
-                    pi.mediaPlayer.seek(total.multiply(panelProgress.getValue() / 100.0));
+                if (total != null && total.greaterThan(Duration.ZERO)) {
+                    Duration seekTo = total.multiply(panelProgress.getValue() / 100.0);
+                    pi.mediaPlayer.seek(seekTo);
+                    if (pi.onPartySeek != null) pi.onPartySeek.accept((long) seekTo.toMillis());
+                }
             }
         });
         panelProgress.valueProperty().addListener((obs, old, val) -> {
@@ -142,13 +145,24 @@ public final class PlayerPanelBuilder {
         timeRow.setAlignment(Pos.CENTER);
         timeRow.setMaxWidth(Double.MAX_VALUE);
 
+        pi.panel = panel; pi.artStack = artStack; pi.artView = artView;
+        pi.panelWaveCanvas = waveCanvas;
+        pi.panelTitle = panelTitle; pi.panelArtist = panelArtist;
+        pi.panelProgress = panelProgress; pi.panelElapsed = panelElapsed; pi.panelTotal = panelTotal;
+        pi.panelSpectroCanvas = spectroCanvas;
+
+        if (pi.isPartyListener) {
+            // ── Listener mode: read-only — no controls, no volume, progress not interactive ──
+            progressStack.setMouseTransparent(true);
+            panel.getChildren().addAll(artStack, waveCanvas, panelTitle, panelArtist, timeRow);
+            return;
+        }
+
         // ── Controls ─────────────────────────────────────────────────────────
         Button ppShuffle = new Button("≋"); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
-        Button ppPrev    = new Button("⏮"); ppPrev.getStyleClass().add("control-btn");    ppPrev.setOnAction(e -> onPrev.accept(pi));
         Button ppPlay    = new Button("▶");  ppPlay.getStyleClass().add("play-btn");
         ppPlay.setStyle("-fx-min-width:64px;-fx-min-height:64px;-fx-font-size:22px;");
         ppPlay.setOnAction(e -> onTogglePlay.accept(pi));
-        Button ppNext   = new Button("⏭"); ppNext.getStyleClass().add("control-btn"); ppNext.setOnAction(e -> onNext.accept(pi));
         Button ppRepeat = new Button("↺"); ppRepeat.getStyleClass().add("control-btn");
         ppRepeat.setOnAction(e -> {
             pi.looping = !pi.looping;
@@ -156,7 +170,16 @@ public final class PlayerPanelBuilder {
             onLoopToggle.accept(pi);
         });
         if (pi.looping) ppRepeat.getStyleClass().add("control-active-2");
-        HBox controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
+
+        HBox controls;
+        if (pi.isMasterPartyPlayer) {
+            // Party master: sin anterior/siguiente
+            controls = new HBox(32, ppShuffle, ppPlay, ppRepeat);
+        } else {
+            Button ppPrev = new Button("⏮"); ppPrev.getStyleClass().add("control-btn"); ppPrev.setOnAction(e -> onPrev.accept(pi));
+            Button ppNext = new Button("⏭"); ppNext.getStyleClass().add("control-btn"); ppNext.setOnAction(e -> onNext.accept(pi));
+            controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
+        }
         controls.setAlignment(Pos.CENTER);
 
         // ── Volume ───────────────────────────────────────────────────────────
@@ -176,12 +199,7 @@ public final class PlayerPanelBuilder {
 
         panel.getChildren().addAll(artStack, waveCanvas, panelTitle, panelArtist, timeRow, controls, volRow);
 
-        pi.panel = panel; pi.artStack = artStack; pi.artView = artView;
-        pi.panelWaveCanvas = waveCanvas;
-        pi.panelTitle = panelTitle; pi.panelArtist = panelArtist;
-        pi.panelProgress = panelProgress; pi.panelElapsed = panelElapsed; pi.panelTotal = panelTotal;
         pi.panelPlayPause = ppPlay; pi.panelRepeat = ppRepeat; pi.panelVolumeSlider = volSlider;
-        pi.panelSpectroCanvas = spectroCanvas;
         pi.panelShuffleBtn = ppShuffle;
     }
 }

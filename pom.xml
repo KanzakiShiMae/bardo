@@ -6,7 +6,7 @@
 
     <groupId>com.musicplayer</groupId>
     <artifactId>bardo</artifactId>
-    <version>0.4.0-alpha</version>
+    <version>0.4.1-alpha</version>
     <packaging>jar</packaging>
     <name>Bardo</name>
     <description>Reproductor de música de escritorio con JavaFX, multicanal, integración YouTube y biblioteca local.</description>
@@ -102,6 +102,13 @@
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
             <version>2.10.1</version>
+        </dependency>
+
+        <!-- UPnP — apertura automática de puerto en el router del Master -->
+        <dependency>
+            <groupId>org.bitlet</groupId>
+            <artifactId>weupnp</artifactId>
+            <version>0.1.4</version>
         </dependency>
 
         <!-- Ikonli icons -->

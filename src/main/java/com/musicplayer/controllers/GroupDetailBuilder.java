@@ -6,6 +6,7 @@ import com.musicplayer.services.LibraryService;
 import javafx.animation.*;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
+import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.collections.ObservableList;
 import javafx.geometry.*;
 import javafx.scene.Cursor;
@@ -95,7 +96,8 @@ public final class GroupDetailBuilder {
                                    BiConsumer<Song, LibraryGroup> onOpenPaused,
                                    Consumer<List<Song>> onOpenMashup,
                                    LibraryService libraryService, Consumer<String> onToast,
-                                   Runnable onPinChanged) {
+                                   Runnable onPinChanged,
+                                   ReadOnlyBooleanProperty masterActive, Consumer<Song> onAddToParty) {
         VBox panel = new VBox(0); panel.getStyleClass().add("panel"); panel.setPadding(Insets.EMPTY);
 
         // Top bar
@@ -205,7 +207,8 @@ public final class GroupDetailBuilder {
                             () -> { if (!justDragged[0]) onPlaySong.accept(song, group); justDragged[0] = false; },
                             () -> onOpenPaused.accept(song, group),
                             moved -> Platform.runLater(() -> songList.scrollTo(filteredSongs.indexOf(moved))),
-                            libraryService, onToast, onPinChanged);
+                            libraryService, onToast, onPinChanged,
+                            masterActive, onAddToParty);
                     }
                     row.prefWidthProperty().bind(lv.widthProperty().subtract(2));
                     setGraphic(row);
@@ -279,7 +282,8 @@ public final class GroupDetailBuilder {
                                       Consumer<String> onBrowser, Runnable onPlay,
                                       Runnable onOpenPaused, Consumer<Song> onMoved,
                                       LibraryService libraryService, Consumer<String> onToast,
-                                      Runnable onPinChanged) {
+                                      Runnable onPinChanged,
+                                      ReadOnlyBooleanProperty masterActive, Consumer<Song> onAddToParty) {
         HBox row = new HBox(12); row.getStyleClass().add("detail-song-row");
         row.setAlignment(Pos.CENTER_LEFT); row.setPadding(new Insets(0, 16, 0, 16));
 
@@ -353,6 +357,15 @@ public final class GroupDetailBuilder {
             onPinChanged.run();
         });
         row.getChildren().add(pinBtn);
+
+        if (masterActive != null && onAddToParty != null) {
+            Button partyBtn = new Button("📢"); partyBtn.getStyleClass().add("row-link-btn");
+            partyBtn.setTooltip(new Tooltip("Añadir a la sala"));
+            partyBtn.visibleProperty().bind(masterActive);
+            partyBtn.managedProperty().bind(masterActive);
+            partyBtn.setOnAction(e -> onAddToParty.accept(song));
+            row.getChildren().add(partyBtn);
+        }
 
         Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("row-remove-btn");
         removeBtn.setOnAction(e -> {

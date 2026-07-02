@@ -1,4 +1,4 @@
-# Bardo v0.4.0-alpha
+# Bardo v0.4.1-alpha
 
 Reproductor de música de escritorio construido con JavaFX 21. Combina biblioteca local, reproducción multicanal simultánea, integración con YouTube y un modo Mashup para mezclar dos canciones en tiempo real.
 

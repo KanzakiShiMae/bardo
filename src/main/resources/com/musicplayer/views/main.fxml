@@ -64,6 +64,7 @@
                 <Button fx:id="btnHome"     text="  🏠  Inicio"        styleClass="nav-btn, nav-btn-active" maxWidth="Infinity" />
                 <Button fx:id="btnLibrary"  text="  📚  Biblioteca"   styleClass="nav-btn"                maxWidth="Infinity" />
                 <Button fx:id="btnSettings" text="  ⚙  Configuración" styleClass="nav-btn"                maxWidth="Infinity" />
+                <Button fx:id="btnParty"    text="  🎧  Party"         styleClass="nav-btn"                maxWidth="Infinity" />
 
                 <Separator styleClass="sidebar-divider" />
 
