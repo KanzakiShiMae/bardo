@@ -22,9 +22,9 @@ class PartyClient {
     interface Callbacks {
         void onConnected();
         void onTrackLoading(String title);
-        void onTrackAnnounced(String videoId, String title);
+        void onTrackAnnounced(String videoId, String title, boolean hidden);
         void onTrackReady(Song song, Path localPath);
-        void onOpen(String videoId);
+        void onOpen(String videoId, boolean hidden);
         void onPlay(String videoId, long positionMs);
         void onPause(String videoId, long positionMs);
         void onSeek(String videoId, long positionMs);
@@ -51,8 +51,6 @@ class PartyClient {
     private Socket socket;
     private PrintWriter out;
     private volatile boolean running;
-    private volatile String currentVideoId;
-
     PartyClient(String host, int port, String listenerName, String emoji, String color,
                 DownloadService downloadService, Callbacks callbacks) {
         this.host = host;
@@ -122,7 +120,7 @@ class PartyClient {
                 case "welcome" -> Platform.runLater(callbacks::onConnected);
                 case "reject"  -> { running = false; String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onRejected(r)); }
                 case "track"  -> handleTrack(msg);
-                case "open"   -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onOpen(vid)); }
+                case "open"   -> { String vid = msg.get("videoId").getAsString(); boolean hid = msg.has("hidden") && msg.get("hidden").getAsBoolean(); Platform.runLater(() -> callbacks.onOpen(vid, hid)); }
                 case "play"   -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onPlay(vid, p)); }
                 case "pause"  -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onPause(vid, p)); }
                 case "seek"   -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onSeek(vid, p)); }
@@ -159,19 +157,18 @@ class PartyClient {
     }
 
     private void handleTrack(JsonObject msg) {
-        String videoId     = msg.get("videoId").getAsString();
-        String title       = msg.get("title").getAsString();
+        String videoId      = msg.get("videoId").getAsString();
+        String title        = msg.get("title").getAsString();
         String thumbnailUrl = msg.has("thumbnailUrl") ? msg.get("thumbnailUrl").getAsString() : "";
-        currentVideoId = videoId;
-
-        Platform.runLater(() -> callbacks.onTrackLoading(title));
-        Platform.runLater(() -> callbacks.onTrackAnnounced(videoId, title));
+        boolean hidden      = msg.has("hidden") && msg.get("hidden").getAsBoolean();
+        String displayTitle = hidden ? "???" : title;
+        Platform.runLater(() -> callbacks.onTrackLoading(displayTitle));
+        Platform.runLater(() -> callbacks.onTrackAnnounced(videoId, title, hidden));
         send("downloading", j -> j.addProperty("videoId", videoId));
 
         Song song = new Song(videoId, title, "", "—", thumbnailUrl, "");
         downloadService.downloadAudio(song, "party")
             .thenAccept(path -> {
-                if (!videoId.equals(currentVideoId)) return; // master cambió de canción durante la descarga
                 song.setLocalFilePath(path.toString());
                 send("ready", j -> j.addProperty("videoId", videoId));
                 Platform.runLater(() -> callbacks.onTrackReady(song, path));

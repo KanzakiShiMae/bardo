@@ -28,11 +28,14 @@ class PartyServer {
         void onReaction(String name, String emoji, String color, String reaction);
     }
 
+    private record TrackRecord(String videoId, String title, String thumbnailUrl, boolean hidden) {}
+
     private final Callbacks callbacks;
     private final Gson gson = new Gson();
     private ServerSocket serverSocket;
-    private final List<ClientHandler>      clients = new CopyOnWriteArrayList<>();
-    private final Map<String, ListenerState> states = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final List<ClientHandler>   clients      = new CopyOnWriteArrayList<>();
+    private final List<TrackRecord>     sharedTracks = new CopyOnWriteArrayList<>();
+    private final Map<String, ListenerState> states  = Collections.synchronizedMap(new LinkedHashMap<>());
     private volatile boolean running;
 
     PartyServer(int port, Callbacks callbacks) throws IOException {
@@ -60,19 +63,23 @@ class PartyServer {
 
     // ── Broadcast ─────────────────────────────────────────────────────────────
 
-    void broadcastTrack(String videoId, String title, String thumbnailUrl) {
+    void broadcastTrack(String videoId, String title, String thumbnailUrl, boolean hidden) {
+        sharedTracks.removeIf(t -> t.videoId().equals(videoId));
+        sharedTracks.add(new TrackRecord(videoId, title, thumbnailUrl != null ? thumbnailUrl : "", hidden));
         JsonObject m = new JsonObject();
         m.addProperty("type", "track");
         m.addProperty("videoId", videoId);
         m.addProperty("title", title);
         m.addProperty("thumbnailUrl", thumbnailUrl != null ? thumbnailUrl : "");
+        m.addProperty("hidden", hidden);
         broadcast(gson.toJson(m));
     }
 
-    void broadcastOpen(String videoId) {
+    void broadcastOpen(String videoId, boolean hidden) {
         JsonObject m = new JsonObject();
         m.addProperty("type", "open");
         m.addProperty("videoId", videoId);
+        m.addProperty("hidden", hidden);
         broadcast(gson.toJson(m));
     }
 
@@ -123,6 +130,16 @@ class PartyServer {
         broadcast(gson.toJson(m));
     }
 
+    void broadcastMasterChat(String text) {
+        JsonObject m = new JsonObject();
+        m.addProperty("type", "chat");
+        m.addProperty("name", "Master");
+        m.addProperty("emoji", "📡");
+        m.addProperty("color", "#54a0ff");
+        m.addProperty("text", text);
+        broadcast(gson.toJson(m));
+    }
+
     void broadcastRoomClosed() {
         JsonObject m = new JsonObject();
         m.addProperty("type", "roomClosed");
@@ -138,6 +155,7 @@ class PartyServer {
 
     void stop() {
         running = false;
+        sharedTracks.clear();
         clients.forEach(ClientHandler::close);
         try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
     }
@@ -241,6 +259,15 @@ class PartyServer {
                 JsonObject welcome = new JsonObject();
                 welcome.addProperty("type", "welcome");
                 handler.send(gson.toJson(welcome));
+                for (TrackRecord t : sharedTracks) {
+                    JsonObject tm = new JsonObject();
+                    tm.addProperty("type", "track");
+                    tm.addProperty("videoId", t.videoId());
+                    tm.addProperty("title", t.title());
+                    tm.addProperty("thumbnailUrl", t.thumbnailUrl());
+                    tm.addProperty("hidden", t.hidden());
+                    handler.send(gson.toJson(tm));
+                }
                 broadcastMembers();
             }
 

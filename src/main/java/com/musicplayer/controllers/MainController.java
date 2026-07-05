@@ -525,6 +525,8 @@ public class MainController implements Initializable {
         Button debugPartyBtn = new Button("🔧 DEBUG Party");
         debugPartyBtn.setStyle("-fx-background-color:#c0392b;-fx-text-fill:white;-fx-font-size:10px;-fx-padding:2 8;-fx-background-radius:4;");
         debugPartyBtn.setOnAction(e -> openDebugPartyTabs());
+        debugPartyBtn.setVisible(false);
+        debugPartyBtn.setManaged(false);
         titleBar.getChildren().add(titleBar.getChildren().size() - 1, debugPartyBtn);
 
         libraryService.getGroups().addListener(
@@ -1098,19 +1100,35 @@ public class MainController implements Initializable {
             rebuildTabBar();
         } catch (Exception e) { showToast("No se puede reproducir: " + file.getName()); return; }
 
+        String displayTitle = (pi.isHiddenPartyTrack) ? "???" : song.getTitle();
         if (pi.panelTitle != null) {
-            pi.panelTitle.setText(song.getTitle()); pi.panelArtist.setText(song.getArtist());
+            pi.panelTitle.setText(displayTitle); pi.panelArtist.setText(pi.isHiddenPartyTrack ? "" : song.getArtist());
             pi.panelProgress.setValue(0); pi.panelElapsed.setText("0:00"); pi.panelTotal.setText("—");
             if (pi.panelPlayPause != null) pi.panelPlayPause.setText(pi.startPaused ? "▶" : "⏸");
         }
-        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
+        if (!pi.isHiddenPartyTrack && song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
             try { Image thumb = new Image(song.getThumbnailUrl(), true); if (pi.artView != null) pi.artView.setImage(thumb); }
             catch (Exception ignored) {}
         }
         AppTab existingTab = findTab(pi.tabId);
+        if (pi.isPartyListener) {
+            // Abrir en segundo plano: no cambiar la pestaña activa ni el reproductor enfocado
+            if (existingTab == null) {
+                AppTab tab = new AppTab(pi.tabId, "🎵", displayTitle, pi.panel, false, null);
+                openTabs.add(tab);
+                if (!contentArea.getChildren().contains(pi.panel)) {
+                    pi.panel.setVisible(false); pi.panel.setManaged(false); contentArea.getChildren().add(pi.panel);
+                }
+            } else {
+                existingTab.title = displayTitle;
+            }
+            rebuildTabBar();
+            updateMiniPlayerVisibility();
+            if (focusedPlayer == null) { setFocusedPlayer(pi); updateLoopButtons(); }
+            return;
+        }
         if (existingTab != null) existingTab.title = song.getTitle();
-        openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, !pi.isPartyListener, null);
-
+        openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, true, null);
         setFocusedPlayer(pi);
         updateLoopButtons();
         updateMiniPlayerVisibility();
@@ -1128,9 +1146,14 @@ public class MainController implements Initializable {
                 if (tot != null && tot.greaterThan(Duration.ZERO))
                     pi.mediaPlayer.seek(tot.multiply(pi.loopInPct / 100.0));
             }
+            pi.mediaPlayer.setVolume(0);
             pi.mediaPlayer.play();
             pi.isPlaying = true;
-            applyVolumesToAll();
+            double target = effectiveVolume(pi);
+            pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(300),
+                new KeyValue(pi.mediaPlayer.volumeProperty(), target, Interpolator.EASE_OUT)));
+            pi.fadeOutAnim.setOnFinished(ev -> { pi.fadeOutAnim = null; applyVolumesToAll(); });
+            pi.fadeOutAnim.play();
             if (pi == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
             updatePlayPauseButton(); rebuildTabBar();
             if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
@@ -1456,13 +1479,28 @@ public class MainController implements Initializable {
      * "Now Playing": portada, título, artista, sliders de progreso y volumen,
      * botón play/pausa y estado de bucle.
      */
+    private void updatePartyListenerLock() {
+        boolean lock = focusedPlayer != null && focusedPlayer.isPartyListener;
+        for (Button b : new Button[]{btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat}) {
+            b.setVisible(!lock); b.setManaged(!lock);
+        }
+        progressSlider.setMouseTransparent(lock);
+        volumeSlider.setVisible(!lock); volumeSlider.setManaged(!lock);
+        volumeLabel.setVisible(!lock);  volumeLabel.setManaged(!lock);
+    }
+
     private void setFocusedPlayer(PlayerInstance pi) {
         focusedPlayer = pi;
+        updatePartyListenerLock();
         Song song = pi.song;
         if (song != null) {
-            nowPlayingTitle.setText(song.getTitle()); nowPlayingArtist.setText(song.getArtist());
-            if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
-                try { albumArt.setImage(new Image(song.getThumbnailUrl(), true)); } catch (Exception ignored) {}
+            if (pi.isHiddenPartyTrack) {
+                nowPlayingTitle.setText("???"); nowPlayingArtist.setText("");
+            } else {
+                nowPlayingTitle.setText(song.getTitle()); nowPlayingArtist.setText(song.getArtist());
+                if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
+                    try { albumArt.setImage(new Image(song.getThumbnailUrl(), true)); } catch (Exception ignored) {}
+            }
         }
         if (pi.mediaPlayer != null) {
             Duration cur = pi.mediaPlayer.getCurrentTime(), total = pi.mediaPlayer.getMedia().getDuration();
@@ -1498,6 +1536,7 @@ public class MainController implements Initializable {
         if (candidates.isEmpty()) {
             focusedPlayer = null; removeGlowEffect();
             themeManager.fadeAllToBase();
+            updatePartyListenerLock();
             updatePlayPauseButton(); updateMiniPlayerVisibility(); return;
         }
         PlayerInstance best = null;
@@ -2573,11 +2612,12 @@ public class MainController implements Initializable {
 
     PlayerInstance getFocusedPlayer() { return focusedPlayer; }
 
-    PlayerInstance partyLoadSong(Song song) {
+    PlayerInstance partyLoadSong(Song song, boolean hidden) {
         String tabId = "player:" + System.currentTimeMillis();
         PlayerInstance pi = new PlayerInstance(tabId);
-        pi.isPartyListener = true;
-        pi.startPaused     = true;
+        pi.isPartyListener      = true;
+        pi.isHiddenPartyTrack   = hidden;
+        pi.startPaused          = true;
         pi.volume = volumeSlider.getValue() / 100.0;
         pi.queue.add(song);
         buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
@@ -2597,21 +2637,59 @@ public class MainController implements Initializable {
 
     void partyPlay(PlayerInstance pi) {
         if (pi == null || pi.mediaPlayer == null) return;
+        if (pi.fadeOutAnim != null) { pi.fadeOutAnim.stop(); pi.fadeOutAnim = null; }
+        pi.mediaPlayer.setVolume(0);
         pi.mediaPlayer.play();
         pi.isPlaying = true;
+        double target = effectiveVolume(pi);
+        pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(300),
+            new KeyValue(pi.mediaPlayer.volumeProperty(), target, Interpolator.EASE_OUT)));
+        pi.fadeOutAnim.setOnFinished(ev -> { pi.fadeOutAnim = null; applyVolumesToAll(); });
+        pi.fadeOutAnim.play();
         if (pi == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
         updatePlayPauseButton();
         rebuildTabBar();
     }
 
-    void partyPause(PlayerInstance pi) {
+    void revealPartyTrack(PlayerInstance pi) {
+        Song song = pi.song;
+        if (song == null) return;
+        pi.isHiddenPartyTrack = false;
+        if (pi.panelTitle  != null) pi.panelTitle.setText(song.getTitle());
+        if (pi.panelArtist != null) pi.panelArtist.setText(song.getArtist());
+        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
+            try {
+                Image thumb = new Image(song.getThumbnailUrl(), true);
+                if (pi.artView != null) pi.artView.setImage(thumb);
+                if (pi == focusedPlayer) albumArt.setImage(thumb);
+            } catch (Exception ignored) {}
+        }
+        AppTab tab = findTab(pi.tabId);
+        if (tab != null) { tab.title = song.getTitle(); rebuildTabBar(); }
+        if (pi == focusedPlayer) {
+            nowPlayingTitle.setText(song.getTitle());
+            nowPlayingArtist.setText(song.getArtist());
+        }
+    }
+
+    void partyPause(PlayerInstance pi, long seekMs) {
         if (pi == null || pi.mediaPlayer == null) return;
-        pi.mediaPlayer.pause();
         pi.isPlaying = false;
-        startWaveDecay(pi);
         if (pi == focusedPlayer) removeGlowEffect();
         updatePlayPauseButton();
-        rebuildTabBar();
+        if (pi.fadeOutAnim != null) pi.fadeOutAnim.stop();
+        pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(700),
+            new KeyValue(pi.mediaPlayer.volumeProperty(), 0.0, Interpolator.EASE_IN)));
+        pi.fadeOutAnim.setOnFinished(ev -> {
+            pi.mediaPlayer.pause();
+            pi.mediaPlayer.seek(javafx.util.Duration.millis(seekMs));
+            startWaveDecay(pi);
+            pi.fadeOutAnim = null;
+            applyVolumesToAll();
+            rebuildTabBar();
+            if (pi == focusedPlayer || focusedPlayer == null) themeManager.updateDynamicColors();
+        });
+        pi.fadeOutAnim.play();
     }
 
     private void openDebugPartyTabs() {

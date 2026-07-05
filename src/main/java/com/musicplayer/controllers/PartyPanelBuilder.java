@@ -51,7 +51,7 @@ class PartyPanelBuilder {
         sharedSongs.add(shared);
         songStatus.put(videoId, new LinkedHashMap<>());
         // Broadcast immediately so listeners start downloading before master hits play
-        partyServer.broadcastTrack(shared.videoId, shared.title, shared.thumbnailUrl);
+        partyServer.broadcastTrack(shared.videoId, shared.title, shared.thumbnailUrl, shared.hidden);
         refreshSongList();
     }
 
@@ -65,6 +65,7 @@ class PartyPanelBuilder {
     private static class SharedSong {
         final Song song;
         final String videoId, title, thumbnailUrl;
+        boolean hidden = false;
         SharedSong(Song s) {
             this.song = s;
             videoId      = s.getVideoId();
@@ -90,6 +91,7 @@ class PartyPanelBuilder {
     private Label listenerSyncLbl;
     private Thread partyCleanupHook;
     private final Map<String, Song> pendingSongs = new LinkedHashMap<>();
+    private final Set<String> hiddenListenerTracks = new java.util.HashSet<>();
     // Listener UI extras
     private VBox listenerMemberListBox;
     private VBox listenerChatBox;
@@ -442,16 +444,26 @@ class PartyPanelBuilder {
                 emojisBox.getChildren().add(emojiLbl);
             }
 
+            Button hideToggleBtn = new Button(shared.hidden ? "🙈" : "👁");
+            hideToggleBtn.getStyleClass().add("btn-secondary");
+            hideToggleBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 6;");
+            hideToggleBtn.setTooltip(new Tooltip(shared.hidden ? "Canción oculta para listeners" : "Canción visible para listeners"));
+            hideToggleBtn.setOnAction(e -> {
+                shared.hidden = !shared.hidden;
+                hideToggleBtn.setText(shared.hidden ? "🙈" : "👁");
+                hideToggleBtn.getTooltip().setText(shared.hidden ? "Canción oculta para listeners" : "Canción visible para listeners");
+            });
+
             Button playPartyBtn = new Button("▶");
             playPartyBtn.getStyleClass().add("btn-secondary");
             playPartyBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 8;");
             playPartyBtn.setDisable(anyDownloading);
             playPartyBtn.setOnAction(e -> {
-                if (partyServer != null) partyServer.broadcastOpen(shared.videoId);
+                if (partyServer != null) partyServer.broadcastOpen(shared.videoId, shared.hidden);
                 mc.openMasterPartyPlayer(shared.song);
             });
 
-            HBox row = new HBox(8, titleLbl, emojisBox, playPartyBtn);
+            HBox row = new HBox(8, titleLbl, emojisBox, hideToggleBtn, playPartyBtn);
             row.setAlignment(Pos.CENTER_LEFT);
             row.setPadding(new Insets(4, 8, 4, 8));
             row.getStyleClass().add("detail-song-row");
@@ -509,7 +521,7 @@ class PartyPanelBuilder {
         songsScroll.getStyleClass().add("results-scroll");
         songsScroll.setPrefHeight(150);
 
-        // ── Chat (solo lectura para el master) ────────────────────────────────
+        // ── Chat ─────────────────────────────────────────────────────────────
         Label chatHeader = new Label("CHAT");
         chatHeader.getStyleClass().add("sidebar-section-label");
         masterChatBox = new VBox(4);
@@ -520,6 +532,27 @@ class PartyPanelBuilder {
         masterChatScrollPane.getStyleClass().add("results-scroll");
         masterChatScrollPane.setPrefHeight(130);
         VBox.setVgrow(masterChatScrollPane, Priority.ALWAYS);
+
+        TextField masterChatInput = new TextField();
+        masterChatInput.setPromptText("Escribe un mensaje como Master…");
+        masterChatInput.getStyleClass().add("detail-search-field");
+        HBox.setHgrow(masterChatInput, Priority.ALWAYS);
+
+        Button masterSendBtn = new Button("Enviar");
+        masterSendBtn.getStyleClass().add("btn-secondary");
+
+        Runnable masterSend = () -> {
+            String text = masterChatInput.getText().trim();
+            if (text.isEmpty()) return;
+            if (partyServer != null) partyServer.broadcastMasterChat(text);
+            addMasterChatMessage("Master", "📡", "#54a0ff", text, null, null);
+            masterChatInput.clear();
+        };
+        masterChatInput.setOnAction(e -> masterSend.run());
+        masterSendBtn.setOnAction(e -> masterSend.run());
+
+        HBox masterInputRow = new HBox(6, masterChatInput, masterSendBtn);
+        masterInputRow.setAlignment(Pos.CENTER_LEFT);
 
         // ── Cerrar sala ───────────────────────────────────────────────────────
         Button closeBtn = new Button("⏹  Cerrar sala");
@@ -546,7 +579,7 @@ class PartyPanelBuilder {
             titleLbl, codeRow, upnpStatusLbl,
             new Separator(), membersHeader, masterMemberListBox,
             new Separator(), songsHeader, songsScroll,
-            new Separator(), chatHeader, masterChatScrollPane,
+            new Separator(), chatHeader, masterChatScrollPane, masterInputRow,
             new Separator(), closeBtn
         );
         content.setPadding(new Insets(4));
@@ -689,22 +722,33 @@ class PartyPanelBuilder {
                 showJoinForm();
             }
             @Override public void onTrackLoading(String title) {
-                if (listenerTrackLbl != null) listenerTrackLbl.setText("⬇ Descargando: " + title + "…");
+                if (listenerTrackLbl != null) listenerTrackLbl.setText("⬇ Descargando…");
             }
             @Override public void onTrackReady(Song song, java.nio.file.Path localPath) {
-                if (listenerTrackLbl != null) listenerTrackLbl.setText("✅ " + song.getTitle());
+                boolean isHidden = hiddenListenerTracks.contains(song.getVideoId());
+                if (listenerTrackLbl != null)
+                    listenerTrackLbl.setText(isHidden ? "✅ Listo" : "✅ " + song.getTitle());
                 pendingSongs.put(song.getVideoId(), song);
                 // Player opens only when master broadcasts "open" — wait for onOpen
             }
-            @Override public void onOpen(String videoId) {
+            @Override public void onOpen(String videoId, boolean hidden) {
                 Song song = pendingSongs.get(videoId);
                 if (song == null) return;
-                partyPlayers.put(videoId, mc.partyLoadSong(song));
+                if (hidden) hiddenListenerTracks.add(videoId);
+                else hiddenListenerTracks.remove(videoId);
+                partyPlayers.put(videoId, mc.partyLoadSong(song, hidden));
             }
             @Override public void onPlay(String videoId, long positionMs) {
                 if (listenerSyncLbl != null) listenerSyncLbl.setText("▶ Reproduciendo");
                 PlayerInstance pi = partyPlayers.get(videoId);
                 if (pi != null && pi.mediaPlayer != null) {
+                    if (pi.isHiddenPartyTrack) {
+                        hiddenListenerTracks.remove(videoId);
+                        mc.revealPartyTrack(pi);
+                        Song real = pendingSongs.get(videoId);
+                        if (real != null && listenerTrackLbl != null)
+                            listenerTrackLbl.setText("✅ " + real.getTitle());
+                    }
                     pi.mediaPlayer.seek(javafx.util.Duration.millis(positionMs));
                     mc.partyPlay(pi);
                 }
@@ -712,10 +756,8 @@ class PartyPanelBuilder {
             @Override public void onPause(String videoId, long positionMs) {
                 if (listenerSyncLbl != null) listenerSyncLbl.setText("⏸ Pausado");
                 PlayerInstance pi = partyPlayers.get(videoId);
-                if (pi != null && pi.mediaPlayer != null) {
-                    pi.mediaPlayer.seek(javafx.util.Duration.millis(positionMs));
-                    mc.partyPause(pi);
-                }
+                if (pi != null && pi.mediaPlayer != null)
+                    mc.partyPause(pi, positionMs);
             }
             @Override public void onSeek(String videoId, long positionMs) {
                 PlayerInstance pi = partyPlayers.get(videoId);
@@ -726,7 +768,7 @@ class PartyPanelBuilder {
                 PlayerInstance pi = partyPlayers.get(videoId);
                 if (pi != null && pi.mediaPlayer != null) {
                     pi.volume = volume;
-                    pi.mediaPlayer.setVolume(volume);
+                    if (pi.fadeOutAnim == null) pi.mediaPlayer.setVolume(volume);
                 }
             }
             @Override public void onLoop(String videoId, boolean looping) {
@@ -734,13 +776,15 @@ class PartyPanelBuilder {
                 if (pi != null) pi.looping = looping;
             }
             @Override public void onCloseTrack(String videoId) {
-                pendingSongs.remove(videoId);
+                hiddenListenerTracks.remove(videoId);
                 closePartyPlayerTab(videoId);
+                // pendingSongs se conserva: el master puede volver a abrir la misma canción
             }
             @Override public void onRoomClosed() {
                 mc.showToast("La sala ha sido cerrada por el master");
                 closeAllPartyPlayerTabs();
                 pendingSongs.clear();
+                hiddenListenerTracks.clear();
                 knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null;
                 if (partyClient != null) { partyClient.disconnect(); partyClient = null; }
                 listenerTrackLbl = null; listenerSyncLbl = null;
@@ -752,6 +796,7 @@ class PartyPanelBuilder {
             @Override public void onDisconnected(String reason) {
                 closeAllPartyPlayerTabs();
                 pendingSongs.clear();
+                hiddenListenerTracks.clear();
                 knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null;
                 partyClient = null;
                 listenerTrackLbl = null; listenerSyncLbl = null;
@@ -759,8 +804,9 @@ class PartyPanelBuilder {
                 PartyPanelBuilder.this.deletePartyDownloads();
                 showError("Desconectado: " + reason);
             }
-            @Override public void onTrackAnnounced(String videoId, String title) {
+            @Override public void onTrackAnnounced(String videoId, String title, boolean hidden) {
                 knownSongs.put(videoId, title);
+                if (hidden) hiddenListenerTracks.add(videoId); else hiddenListenerTracks.remove(videoId);
             }
             @Override public void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle) {
                 PartyPanelBuilder.this.addListenerChatMessage(name, emoji, color, text, songRefVideoId, songRefTitle);
@@ -807,13 +853,7 @@ class PartyPanelBuilder {
         memberPh.setStyle("-fx-font-size: 11px;");
         listenerMemberListBox.getChildren().add(memberPh);
 
-        // ── Canción y estado ──────────────────────────────────────────────────
-        Label trackHeader = new Label("CANCIÓN");
-        trackHeader.getStyleClass().add("sidebar-section-label");
-        listenerTrackLbl = new Label("Esperando al Master…");
-        listenerTrackLbl.setWrapText(true);
-        listenerTrackLbl.getStyleClass().add("greeting-sub");
-
+        // ── Estado de reproducción ────────────────────────────────────────────
         Label syncHeader = new Label("ESTADO");
         syncHeader.getStyleClass().add("sidebar-section-label");
         listenerSyncLbl = new Label("⏸ Esperando…");
@@ -849,13 +889,11 @@ class PartyPanelBuilder {
         Button refBtn = new Button("📎");
         refBtn.getStyleClass().add("btn-secondary");
         refBtn.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 12px; -fx-padding: 5 8;");
+        refBtn.setVisible(false); refBtn.setManaged(false);
         refBtn.setOnAction(e -> {
-            if (knownSongs.isEmpty()) {
-                mc.showToast("Aún no hay canciones compartidas");
-                return;
-            }
             ContextMenu cm = new ContextMenu();
             for (Map.Entry<String, String> entry : knownSongs.entrySet()) {
+                if (hiddenListenerTracks.contains(entry.getKey())) continue;
                 MenuItem item = new MenuItem("🎵  " + entry.getValue());
                 item.setOnAction(ev -> {
                     pendingRefVideoId = entry.getKey();
@@ -864,6 +902,10 @@ class PartyPanelBuilder {
                     refChip.setVisible(true); refChip.setManaged(true);
                 });
                 cm.getItems().add(item);
+            }
+            if (cm.getItems().isEmpty()) {
+                mc.showToast("Aún no hay canciones disponibles para referenciar");
+                return;
             }
             // Platform.runLater evita que el ContextMenu se cierre inmediatamente
             // al ser mostrado desde dentro de un ActionEvent del mismo botón
@@ -913,8 +955,7 @@ class PartyPanelBuilder {
         VBox inner = new VBox(10,
             titleLbl, connLbl,
             new Separator(), membersHeader, listenerMemberListBox,
-            new Separator(), trackHeader, listenerTrackLbl,
-            syncHeader, listenerSyncLbl,
+            new Separator(), syncHeader, listenerSyncLbl,
             new Separator(), chatHeader, listenerChatScrollPane,
             refChip, inputRow,
             new Separator(), leaveBtn

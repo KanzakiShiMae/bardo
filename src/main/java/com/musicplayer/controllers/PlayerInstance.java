@@ -81,9 +81,10 @@ public class PlayerInstance {
     public javafx.beans.value.ChangeListener<Number> spectroHeightListener = null;
 
     // ── Party listener mode (read-only player, no controls) ───────────────────
-    public boolean isPartyListener     = false;
-    public boolean isMasterPartyPlayer = false;
-    public boolean startPaused         = false;
+    public boolean isPartyListener      = false;
+    public boolean isMasterPartyPlayer  = false;
+    public boolean startPaused          = false;
+    public boolean isHiddenPartyTrack   = false;
     public java.util.function.LongConsumer onPartySeek = null;
 
     // ── Mashup pairing ─────────────────────────────────────────────────────────
