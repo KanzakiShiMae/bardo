@@ -33,8 +33,12 @@ class PartyClient {
         void onCloseTrack(String videoId);
         void onRoomClosed();
         void onRejected(String reason);
+        void onKicked();
+        void onBanned();
+        void onRedownload(String videoId);
+        void onRemoveTrack(String videoId);
         void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle);
-        void onReaction(String name, String emoji, String color, String reaction);
+        void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle);
         void onMembersUpdate(java.util.List<MemberInfo> members);
         void onDisconnected(String reason);
     }
@@ -107,8 +111,15 @@ class PartyClient {
         });
     }
 
-    void sendReaction(String reaction) {
-        send("reaction", j -> { j.addProperty("reaction", reaction); j.addProperty("color", color); });
+    void sendReaction(String reaction, String songRefVideoId, String songRefTitle) {
+        send("reaction", j -> {
+            j.addProperty("reaction", reaction);
+            j.addProperty("color", color);
+            if (songRefVideoId != null) {
+                j.addProperty("songRefVideoId", songRefVideoId);
+                j.addProperty("songRefTitle", songRefTitle != null ? songRefTitle : "");
+            }
+        });
     }
 
     // ── Message handling ──────────────────────────────────────────────────────
@@ -126,10 +137,14 @@ class PartyClient {
                 case "seek"   -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onSeek(vid, p)); }
                 case "volume" -> { String vid = msg.get("videoId").getAsString(); double v = msg.get("volume").getAsDouble(); Platform.runLater(() -> callbacks.onVolume(vid, v)); }
                 case "loop"       -> { String vid = msg.get("videoId").getAsString(); boolean l = msg.get("looping").getAsBoolean(); Platform.runLater(() -> callbacks.onLoop(vid, l)); }
-                case "closeTrack" -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onCloseTrack(vid)); }
-                case "roomClosed" -> { running = false; Platform.runLater(() -> callbacks.onRoomClosed()); }
+                case "closeTrack"  -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onCloseTrack(vid)); }
+                case "roomClosed"  -> { running = false; Platform.runLater(() -> callbacks.onRoomClosed()); }
+                case "kick"        -> { running = false; Platform.runLater(() -> callbacks.onKicked()); }
+                case "ban"         -> { running = false; Platform.runLater(() -> callbacks.onBanned()); }
+                case "redownload"  -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onRedownload(vid)); }
+                case "removeTrack" -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onRemoveTrack(vid)); }
                 case "chat" -> {
-                    String n = msg.get("name").getAsString(); String em = msg.has("emoji") ? msg.get("emoji").getAsString() : "🎵";
+                    String n = msg.get("name").getAsString(); String em = msg.has("emoji") ? msg.get("emoji").getAsString() : "bxs-music";
                     String c = msg.has("color") ? msg.get("color").getAsString() : "#a090b0";
                     String t = msg.has("text") ? msg.get("text").getAsString() : "";
                     String svid = msg.has("songRefVideoId") ? msg.get("songRefVideoId").getAsString() : null;
@@ -137,10 +152,12 @@ class PartyClient {
                     Platform.runLater(() -> callbacks.onChatMessage(n, em, c, t, svid, st));
                 }
                 case "reaction" -> {
-                    String n = msg.get("name").getAsString(); String em = msg.has("emoji") ? msg.get("emoji").getAsString() : "🎵";
+                    String n = msg.get("name").getAsString(); String em = msg.has("emoji") ? msg.get("emoji").getAsString() : "bxs-music";
                     String c = msg.has("color") ? msg.get("color").getAsString() : "#a090b0";
                     String r = msg.get("reaction").getAsString();
-                    Platform.runLater(() -> callbacks.onReaction(n, em, c, r));
+                    String svid = msg.has("songRefVideoId") ? msg.get("songRefVideoId").getAsString() : null;
+                    String st   = msg.has("songRefTitle")   ? msg.get("songRefTitle").getAsString()   : null;
+                    Platform.runLater(() -> callbacks.onReaction(n, em, c, r, svid, st));
                 }
                 case "members" -> {
                     com.google.gson.JsonArray arr = msg.getAsJsonArray("members");

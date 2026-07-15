@@ -3,6 +3,10 @@ package com.musicplayer.controllers;
 import com.musicplayer.models.LibraryGroup;
 import com.musicplayer.models.Song;
 import com.musicplayer.services.ConfigLoader;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import com.musicplayer.services.LibraryService;
 import com.musicplayer.services.PersistenceService;
 import com.musicplayer.services.SpectrogramService;
@@ -124,24 +128,26 @@ public final class SettingsPanelBuilder {
         apiVisible.textProperty().bindBidirectional(apiField.textProperty());
 
         boolean[] revealing = {false};
-        Button toggleVisBtn = new Button("👁");
+        Button toggleVisBtn = new Button();
         toggleVisBtn.getStyleClass().add("np-like-btn");
+        MainController.ico(toggleVisBtn, BoxiconsRegular.SHOW, 14, false);
         toggleVisBtn.setOnAction(e -> {
             revealing[0] = !revealing[0];
             apiField.setVisible(!revealing[0]);   apiField.setManaged(!revealing[0]);
             apiVisible.setVisible(revealing[0]);  apiVisible.setManaged(revealing[0]);
-            toggleVisBtn.setText(revealing[0] ? "🔒" : "👁");
+            MainController.ico(toggleVisBtn, revealing[0] ? BoxiconsSolid.LOCK : BoxiconsRegular.SHOW, 14, false);
             if (revealing[0]) apiVisible.requestFocus(); else apiField.requestFocus();
         });
 
         Label apiStatusLbl = new Label(""); apiStatusLbl.getStyleClass().add("greeting-sub");
         apiStatusLbl.setStyle("-fx-text-fill:#c0392b;");
 
-        Button saveRestartBtn = new Button("💾  Guardar y reiniciar");
+        Button saveRestartBtn = new Button("  Guardar y reiniciar");
         saveRestartBtn.getStyleClass().add("btn-primary");
+        MainController.ico(saveRestartBtn, BoxiconsSolid.SAVE, 14, true);
         saveRestartBtn.setOnAction(e -> {
             String key = apiField.getText().strip();
-            if (key.isBlank()) { apiStatusLbl.setText("⚠ La clave no puede estar vacía."); return; }
+            if (key.isBlank()) { apiStatusLbl.setText("La clave no puede estar vacía."); return; }
             libraryService.saveYouTubeApiKey(key);
             try {
                 ProcessHandle.current().info().command().ifPresent(cmd -> {
@@ -167,8 +173,9 @@ public final class SettingsPanelBuilder {
 
         VBox quotaSection;
         if (quotaTracker.isEnforced()) {
-            Label enforcedLbl = new Label(
-                "🔒  Límite activo — API de desarrollo (no se puede desactivar)");
+            Label enforcedLbl = new Label("  Límite activo — API de desarrollo (no se puede desactivar)");
+            FontIcon lockIcon = new FontIcon(BoxiconsSolid.LOCK); lockIcon.setIconSize(13); lockIcon.getStyleClass().add("icon-secondary");
+            enforcedLbl.setGraphic(lockIcon);
             enforcedLbl.getStyleClass().add("greeting-sub");
             Label enforcedMax = new Label(
                 "Límite diario: " + YouTubeQuotaTracker.ENFORCED_MAX + " unidades");
@@ -193,8 +200,9 @@ public final class SettingsPanelBuilder {
             Label unitLbl = new Label("unidades");
             unitLbl.getStyleClass().add("greeting-sub");
 
-            Button saveQuotaBtn = new Button("💾  Guardar");
+            Button saveQuotaBtn = new Button("  Guardar");
             saveQuotaBtn.getStyleClass().add("btn-primary");
+            MainController.ico(saveQuotaBtn, BoxiconsSolid.SAVE, 14, true);
             saveQuotaBtn.setDisable(!quotaTracker.isEnabled());
 
             Label quotaStatusLbl = new Label("");
@@ -214,11 +222,11 @@ public final class SettingsPanelBuilder {
                     int val = Integer.parseInt(limitField.getText().strip());
                     quotaTracker.setDailyMax(val);
                     limitField.setText(String.valueOf(quotaTracker.getDailyMax()));
-                    quotaStatusLbl.setText("✓ Guardado");
+                    quotaStatusLbl.setText("Guardado");
                     quotaStatusLbl.setStyle("-fx-text-fill: #27ae60;");
                     clearStatus.playFromStart();
                 } catch (NumberFormatException ex) {
-                    quotaStatusLbl.setText("⚠ Introduce un número entero.");
+                    quotaStatusLbl.setText("Introduce un número entero.");
                     quotaStatusLbl.setStyle("-fx-text-fill: #c0392b;");
                 }
             });
@@ -247,8 +255,9 @@ public final class SettingsPanelBuilder {
         pathLbl.setStyle("-fx-font-family: monospace;");
         pathLbl.setWrapText(true);
 
-        Button changeDirBtn = new Button("📂  Cambiar carpeta");
+        Button changeDirBtn = new Button("  Cambiar carpeta");
         changeDirBtn.getStyleClass().add("btn-secondary");
+        MainController.ico(changeDirBtn, BoxiconsRegular.FOLDER_OPEN, 14, false);
         changeDirBtn.setOnAction(e -> {
             String defaultDir = PersistenceService.bardoBaseDir().resolve("audio").toString();
             List<String> history = libraryService.loadAudioDirHistory();
@@ -275,8 +284,9 @@ public final class SettingsPanelBuilder {
             "Gestiona las canciones descargadas y el espacio de almacenamiento que ocupan.");
         downloadsDescLbl.setWrapText(true); downloadsDescLbl.getStyleClass().add("greeting-sub");
 
-        Button manageDownloadsBtn = new Button("📦  Ver descargas");
+        Button manageDownloadsBtn = new Button("  Ver descargas");
         manageDownloadsBtn.getStyleClass().add("btn-secondary");
+        MainController.ico(manageDownloadsBtn, BoxiconsRegular.ARCHIVE, 14, false);
         manageDownloadsBtn.setOnAction(e ->
             showDownloadsDialog(settingsPanel, libraryService, spectrogramService));
 
@@ -406,8 +416,9 @@ public final class SettingsPanelBuilder {
             colorRows.getChildren().add(row);
         }
 
-        Button resetThemeBtn = new Button("↺  Restaurar colores predeterminados");
+        Button resetThemeBtn = new Button("  Restaurar colores predeterminados");
         resetThemeBtn.getStyleClass().add("btn-secondary");
+        MainController.ico(resetThemeBtn, BoxiconsRegular.RESET, 14, false);
         resetThemeBtn.setOnAction(e -> {
             for (int i = 0; i < ThemeManager.THEME_VARS.length; i++) {
                 String var = ThemeManager.THEME_VARS[i][0], def = ThemeManager.THEME_VARS[i][1];
@@ -581,14 +592,14 @@ public final class SettingsPanelBuilder {
         listView.setCellFactory(lv -> new ListCell<>() {
             private final CheckBox chk = new CheckBox();
             private final ImageView thumbIv = new ImageView();
-            private final Label thumbPh = new Label("🎵");
+            private final Label thumbPh = new Label();
             private final StackPane thumbStack = new StackPane(thumbIv, thumbPh);
             private final Label nameLbl = new Label();
             private final Label sizeLbl = new Label();
             private final HBox row = new HBox(10, chk, thumbStack, nameLbl, sizeLbl);
             {
                 thumbIv.setFitWidth(56); thumbIv.setFitHeight(32); thumbIv.setPreserveRatio(false);
-                thumbPh.setStyle("-fx-font-size: 18px; -fx-min-width: 56px; -fx-alignment: center;");
+                thumbPh.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 18)); thumbPh.setStyle("-fx-min-width: 56px; -fx-alignment: center;");
                 nameLbl.getStyleClass().add("song-title");
                 HBox.setHgrow(nameLbl, Priority.ALWAYS);
                 nameLbl.setMaxWidth(Double.MAX_VALUE);
@@ -707,9 +718,10 @@ public final class SettingsPanelBuilder {
             updateTotal.run();
         });
 
-        Button deleteBtn = new Button("🗑  Eliminar seleccionadas");
+        Button deleteBtn = new Button("  Eliminar seleccionadas");
         deleteBtn.getStyleClass().add("btn-primary");
         deleteBtn.setStyle("-fx-background-color: #c0392b;");
+        MainController.ico(deleteBtn, BoxiconsSolid.TRASH, 14, false);
         deleteBtn.setOnAction(ev -> {
             List<DownloadRow> toDelete = allRows.stream()
                 .filter(r -> r.selected).collect(Collectors.toList());
@@ -792,8 +804,9 @@ public final class SettingsPanelBuilder {
             row.getChildren().add(rb);
 
             if (!isDefault) {
-                Button delBtn = new Button("✕");
+                Button delBtn = new Button();
                 delBtn.getStyleClass().add("row-remove-btn");
+                MainController.ico(delBtn, BoxiconsRegular.X, 13, false);
                 delBtn.setTooltip(new Tooltip("Eliminar del historial"));
                 delBtn.setOnAction(ev -> {
                     optionsBox.getChildren().remove(row);
@@ -823,8 +836,9 @@ public final class SettingsPanelBuilder {
         Separator sep = new Separator();
         sep.setPadding(new Insets(6, 0, 2, 0));
 
-        Button exploreBtn = new Button("📂  Explorar otra carpeta…");
+        Button exploreBtn = new Button("  Explorar otra carpeta…");
         exploreBtn.getStyleClass().add("btn-secondary");
+        MainController.ico(exploreBtn, BoxiconsRegular.FOLDER_OPEN, 14, false);
         exploreBtn.setOnAction(ev -> {
             DirectoryChooser dc = new DirectoryChooser();
             dc.setTitle("Seleccionar carpeta de música");

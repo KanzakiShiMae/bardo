@@ -3,6 +3,10 @@ package com.musicplayer.controllers;
 import com.musicplayer.models.LibraryGroup;
 import com.musicplayer.models.Song;
 import com.musicplayer.services.LibraryService;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import javafx.animation.*;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
@@ -59,8 +63,11 @@ public final class GroupDetailBuilder {
             try { iv.setImage(new Image(thumbUrl, 56, 32, false, true, true)); } catch (Exception ignored) {}
             row.getChildren().add(iv);
         } else {
-            Label icon = new Label(group.isYoutubePlaylist() ? "📺" : "🎵");
-            icon.setStyle("-fx-font-size: 20px; -fx-min-width: 48px; -fx-alignment: center;");
+            Label icon = new Label();
+            icon.setGraphic(group.isYoutubePlaylist()
+                ? IkonUtil.duotone(BoxiconsSolid.TV, BoxiconsRegular.TV, 20)
+                : IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 20));
+            icon.setStyle("-fx-min-width: 48px; -fx-alignment: center;");
             row.getChildren().add(icon);
         }
 
@@ -72,11 +79,14 @@ public final class GroupDetailBuilder {
 
         ComboBox<String> typeCombo = buildTypeCombo(group);
 
-        Label chevron = new Label("›"); chevron.setStyle("-fx-font-size: 20px;"); chevron.getStyleClass().add("group-arrow");
-        Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("group-remove-btn"); removeBtn.setOnAction(e -> onRemove.run());
+        Label chevron = new Label(); chevron.getStyleClass().add("group-arrow");
+        chevron.setGraphic(IkonUtil.duotone(BoxiconsSolid.CHEVRON_RIGHT, BoxiconsRegular.CHEVRON_RIGHT, 18));
+        Button removeBtn = new Button(); removeBtn.getStyleClass().add("group-remove-btn"); removeBtn.setOnAction(e -> onRemove.run());
+        MainController.ico(removeBtn, BoxiconsRegular.X, 13, false);
 
         if (group.isYoutubePlaylist() && onRefreshYt != null) {
-            Button refreshBtn = new Button("🔄"); refreshBtn.getStyleClass().add("group-refresh-btn");
+            Button refreshBtn = new Button(); refreshBtn.getStyleClass().add("group-refresh-btn");
+            MainController.ico(refreshBtn, BoxiconsRegular.REFRESH, 14, false);
             refreshBtn.setOnAction(e -> { e.consume(); onRefreshYt.accept(refreshBtn); });
             row.getChildren().addAll(meta, typeCombo, chevron, refreshBtn, removeBtn);
         } else {
@@ -101,8 +111,12 @@ public final class GroupDetailBuilder {
         VBox panel = new VBox(0); panel.getStyleClass().add("panel"); panel.setPadding(Insets.EMPTY);
 
         // Top bar
-        Button backBtn = new Button("←"); backBtn.getStyleClass().add("back-btn"); backBtn.setOnAction(e -> onBack.run());
-        Label iconLbl  = new Label(group.isYoutubePlaylist() ? "📺" : "🎵"); iconLbl.setStyle("-fx-font-size: 22px;");
+        Button backBtn = new Button(); backBtn.getStyleClass().add("back-btn"); backBtn.setOnAction(e -> onBack.run());
+        MainController.ico(backBtn, BoxiconsRegular.ARROW_BACK, 16, false);
+        Label iconLbl = new Label();
+        iconLbl.setGraphic(group.isYoutubePlaylist()
+            ? IkonUtil.duotone(BoxiconsSolid.TV, BoxiconsRegular.TV, 22)
+            : IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 22));
 
         Label titleLbl = new Label(group.getName()); titleLbl.getStyleClass().add("greeting");
         Label cntLbl   = new Label();
@@ -112,12 +126,15 @@ public final class GroupDetailBuilder {
 
         ComboBox<String> typeCombo = buildTypeCombo(group);
 
-        Button playAllBtn = new Button("▶"); playAllBtn.getStyleClass().add("btn-icon"); playAllBtn.setOnAction(e -> onPlayAll.run());
-        Button importBtn  = new Button("📁"); importBtn.getStyleClass().add("btn-icon");  importBtn.setOnAction(e -> onImportFolder.run());
+        Button playAllBtn = new Button(); playAllBtn.getStyleClass().add("btn-icon"); playAllBtn.setOnAction(e -> onPlayAll.run());
+        MainController.ico(playAllBtn, BoxiconsRegular.PLAY, 15, true);
+        Button importBtn = new Button(); importBtn.getStyleClass().add("btn-icon"); importBtn.setOnAction(e -> onImportFolder.run());
+        MainController.ico(importBtn, BoxiconsSolid.FOLDER_OPEN, 15, false);
         HBox actionBtns = new HBox(6, typeCombo, playAllBtn, importBtn); actionBtns.setAlignment(Pos.CENTER_RIGHT);
         // Mashup selection state
         Song[]    mashupSel     = {null, null};
-        Button[]  mashupPlayBtn = {new Button("🎧  Reproducir Mashup")};
+        Button[]  mashupPlayBtn = {new Button("  Reproducir Mashup")};
+        MainController.ico(mashupPlayBtn[0], BoxiconsRegular.HEADPHONE, 15, true);
         mashupPlayBtn[0].getStyleClass().add("btn-primary");
         mashupPlayBtn[0].setDisable(true);
         mashupPlayBtn[0].setOnAction(e -> {
@@ -138,9 +155,11 @@ public final class GroupDetailBuilder {
         });
 
         if (group.isYoutubePlaylist()) {
-            Button refreshBtn = new Button("🔄"); refreshBtn.getStyleClass().add("btn-icon");
+            Button refreshBtn = new Button(); refreshBtn.getStyleClass().add("btn-icon");
+            MainController.ico(refreshBtn, BoxiconsRegular.REFRESH, 15, false);
             refreshBtn.setOnAction(e -> { if (onRefreshYt != null) onRefreshYt.accept(refreshBtn); });
-            Button dlBtn = new Button("⬇"); dlBtn.getStyleClass().add("btn-icon");
+            Button dlBtn = new Button(); dlBtn.getStyleClass().add("btn-icon");
+            MainController.ico(dlBtn, BoxiconsSolid.DOWNLOAD, 15, false);
             dlBtn.setOnAction(e -> { if (onDownloadAll != null) onDownloadAll.run(); });
             actionBtns.getChildren().addAll(refreshBtn, dlBtn);
         }
@@ -162,8 +181,8 @@ public final class GroupDetailBuilder {
                 : s -> UIUtils.normalize(s.getTitle()).contains(q));
         });
 
-        Label searchIcon = new Label("🔍");
-        searchIcon.setStyle("-fx-font-size:13px;");
+        Label searchIcon = new Label();
+        searchIcon.setGraphic(IkonUtil.duotone(BoxiconsSolid.SEARCH, BoxiconsRegular.SEARCH, 14));
         HBox searchRow = new HBox(6, searchIcon, searchField);
         searchRow.setAlignment(Pos.CENTER_RIGHT);
         searchRow.setPadding(new Insets(8, 28, 6, 28));
@@ -294,7 +313,8 @@ public final class GroupDetailBuilder {
             try { iv.setImage(new Image(song.getThumbnailUrl(), 56, 32, false, true, true)); } catch (Exception ignored) {}
             row.getChildren().add(iv);
         } else {
-            Label ph = new Label("🎵"); ph.setStyle("-fx-font-size: 18px; -fx-min-width: 56px; -fx-alignment: center;");
+            Label ph = new Label();
+            ph.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 18)); ph.setStyle("-fx-min-width: 56px; -fx-alignment: center;");
             row.getChildren().add(ph);
         }
 
@@ -304,7 +324,9 @@ public final class GroupDetailBuilder {
         row.getChildren().add(titleLbl);
 
         if (song.isLocal()) {
-            Label dlBadge = new Label("⬇"); dlBadge.getStyleClass().add("dl-badge");
+            Label dlBadge = new Label();
+            FontIcon dlIcon = new FontIcon(BoxiconsSolid.DOWNLOAD); dlIcon.setIconSize(12); dlIcon.getStyleClass().add("icon-secondary");
+            dlBadge.setGraphic(dlIcon); dlBadge.getStyleClass().add("dl-badge");
             row.getChildren().add(dlBadge);
         }
 
@@ -314,18 +336,21 @@ public final class GroupDetailBuilder {
         row.getChildren().add(durLbl);
 
         if (hasThumb) {
-            Button linkBtn = new Button("🔗"); linkBtn.getStyleClass().add("row-link-btn");
+            Button linkBtn = new Button(); linkBtn.getStyleClass().add("row-link-btn");
+            MainController.ico(linkBtn, BoxiconsRegular.LINK_ALT, 14, false);
             linkBtn.setOnAction(e -> onBrowser.accept(song.getVideoId()));
             row.getChildren().add(linkBtn);
         }
 
-        Button openBtn = new Button("▷"); openBtn.getStyleClass().add("row-open-btn");
+        Button openBtn = new Button(); openBtn.getStyleClass().add("row-open-btn");
+        MainController.ico(openBtn, BoxiconsRegular.PLAY_CIRCLE, 14, true);
         openBtn.setTooltip(new Tooltip("Abrir en reproductor (pausado)"));
         openBtn.setOnAction(e -> onOpenPaused.run());
         row.getChildren().add(openBtn);
 
         // Playlist checklist button
-        Button checklistBtn = new Button("≡"); checklistBtn.getStyleClass().add("row-checklist-btn");
+        Button checklistBtn = new Button(); checklistBtn.getStyleClass().add("row-checklist-btn");
+        MainController.ico(checklistBtn, BoxiconsRegular.LIST_UL, 14, false);
         ContextMenu[] menuRef = {null};
         checklistBtn.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
             if (menuRef[0] != null && menuRef[0].isShowing()) {
@@ -341,25 +366,29 @@ public final class GroupDetailBuilder {
 
         // Pin button
         boolean[] pinned = {libraryService.isSongPinned(song.getVideoId())};
-        Button pinBtn = new Button(pinned[0] ? "📌" : "📍");
+        Button pinBtn = new Button();
         pinBtn.getStyleClass().add("row-pin-btn");
         if (pinned[0]) pinBtn.getStyleClass().add("row-pin-btn-active");
+        MainController.ico(pinBtn, pinned[0] ? BoxiconsSolid.BOOKMARK : BoxiconsRegular.BOOKMARK, 14, pinned[0]);
         pinBtn.setOnAction(e -> {
             if (pinned[0]) {
                 libraryService.unpinSong(song.getVideoId());
-                pinned[0] = false; pinBtn.setText("📍");
+                pinned[0] = false;
                 pinBtn.getStyleClass().remove("row-pin-btn-active");
+                MainController.ico(pinBtn, BoxiconsRegular.BOOKMARK, 14, false);
             } else {
                 libraryService.pinSong(song);
-                pinned[0] = true; pinBtn.setText("📌");
+                pinned[0] = true;
                 pinBtn.getStyleClass().add("row-pin-btn-active");
+                MainController.ico(pinBtn, BoxiconsSolid.BOOKMARK, 14, true);
             }
             onPinChanged.run();
         });
         row.getChildren().add(pinBtn);
 
         if (masterActive != null && onAddToParty != null) {
-            Button partyBtn = new Button("📢"); partyBtn.getStyleClass().add("row-link-btn");
+            Button partyBtn = new Button(); partyBtn.getStyleClass().add("row-link-btn");
+            MainController.ico(partyBtn, BoxiconsSolid.MEGAPHONE, 14, false);
             partyBtn.setTooltip(new Tooltip("Añadir a la sala"));
             partyBtn.visibleProperty().bind(masterActive);
             partyBtn.managedProperty().bind(masterActive);
@@ -367,7 +396,8 @@ public final class GroupDetailBuilder {
             row.getChildren().add(partyBtn);
         }
 
-        Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("row-remove-btn");
+        Button removeBtn = new Button(); removeBtn.getStyleClass().add("row-remove-btn");
+        MainController.ico(removeBtn, BoxiconsRegular.X, 13, false);
         removeBtn.setOnAction(e -> {
             Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
             alert.setTitle("Eliminar canción");
@@ -404,7 +434,8 @@ public final class GroupDetailBuilder {
             try { iv.setImage(new Image(song.getThumbnailUrl(), 56, 32, false, true, true)); } catch (Exception ignored) {}
             row.getChildren().add(iv);
         } else {
-            Label ph = new Label("🎵"); ph.setStyle("-fx-font-size:18px; -fx-min-width:56px; -fx-alignment:center;");
+            Label ph = new Label();
+            ph.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 18)); ph.setStyle("-fx-min-width:56px; -fx-alignment:center;");
             row.getChildren().add(ph);
         }
 
@@ -414,7 +445,9 @@ public final class GroupDetailBuilder {
         row.getChildren().add(titleLbl);
 
         if (song.isLocal()) {
-            Label dlBadge = new Label("⬇"); dlBadge.getStyleClass().add("dl-badge");
+            Label dlBadge = new Label();
+            FontIcon dlIconM = new FontIcon(BoxiconsSolid.DOWNLOAD); dlIconM.setIconSize(12); dlIconM.getStyleClass().add("icon-secondary");
+            dlBadge.setGraphic(dlIconM); dlBadge.getStyleClass().add("dl-badge");
             row.getChildren().add(dlBadge);
         }
 
@@ -424,7 +457,8 @@ public final class GroupDetailBuilder {
         row.getChildren().add(durLbl);
 
         if (hasThumb) {
-            Button linkBtn = new Button("🔗"); linkBtn.getStyleClass().add("row-link-btn");
+            Button linkBtn = new Button(); linkBtn.getStyleClass().add("row-link-btn");
+            MainController.ico(linkBtn, BoxiconsRegular.LINK_ALT, 14, false);
             linkBtn.setOnAction(e -> onBrowser.accept(song.getVideoId()));
             row.getChildren().add(linkBtn);
         }
@@ -437,7 +471,8 @@ public final class GroupDetailBuilder {
         row.getChildren().add(selBtn);
 
         // Playlist checklist
-        Button checklistBtn = new Button("≡"); checklistBtn.getStyleClass().add("row-checklist-btn");
+        Button checklistBtn = new Button(); checklistBtn.getStyleClass().add("row-checklist-btn");
+        MainController.ico(checklistBtn, BoxiconsRegular.LIST_UL, 14, false);
         ContextMenu[] menuRef = {null};
         checklistBtn.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
             if (menuRef[0] != null && menuRef[0].isShowing()) { menuRef[0].hide(); e.consume(); }
@@ -450,24 +485,28 @@ public final class GroupDetailBuilder {
 
         // Pin button
         boolean[] pinnedM = {libraryService.isSongPinned(song.getVideoId())};
-        Button pinBtnM = new Button(pinnedM[0] ? "📌" : "📍");
+        Button pinBtnM = new Button();
         pinBtnM.getStyleClass().add("row-pin-btn");
         if (pinnedM[0]) pinBtnM.getStyleClass().add("row-pin-btn-active");
+        MainController.ico(pinBtnM, pinnedM[0] ? BoxiconsSolid.BOOKMARK : BoxiconsRegular.BOOKMARK, 14, pinnedM[0]);
         pinBtnM.setOnAction(e -> {
             if (pinnedM[0]) {
                 libraryService.unpinSong(song.getVideoId());
-                pinnedM[0] = false; pinBtnM.setText("📍");
+                pinnedM[0] = false;
                 pinBtnM.getStyleClass().remove("row-pin-btn-active");
+                MainController.ico(pinBtnM, BoxiconsRegular.BOOKMARK, 14, false);
             } else {
                 libraryService.pinSong(song);
-                pinnedM[0] = true; pinBtnM.setText("📌");
+                pinnedM[0] = true;
                 pinBtnM.getStyleClass().add("row-pin-btn-active");
+                MainController.ico(pinBtnM, BoxiconsSolid.BOOKMARK, 14, true);
             }
             onPinChanged.run();
         });
         row.getChildren().add(pinBtnM);
 
-        Button removeBtn = new Button("✕"); removeBtn.getStyleClass().add("row-remove-btn");
+        Button removeBtn = new Button(); removeBtn.getStyleClass().add("row-remove-btn");
+        MainController.ico(removeBtn, BoxiconsRegular.X, 13, false);
         removeBtn.setOnAction(e -> {
             Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
             alert.setTitle("Eliminar canción");
@@ -488,7 +527,10 @@ public final class GroupDetailBuilder {
         ContextMenu menu = new ContextMenu();
         for (LibraryGroup g : libraryService.getGroups()) {
             boolean inGroup = g.getSongs().stream().anyMatch(s -> s.getVideoId().equals(song.getVideoId()));
-            CheckMenuItem item = new CheckMenuItem((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName());
+            CheckMenuItem item = new CheckMenuItem(g.getName());
+            FontIcon menuItemIcon = new FontIcon(g.isYoutubePlaylist() ? BoxiconsSolid.TV : BoxiconsSolid.MUSIC);
+            menuItemIcon.setIconSize(13); menuItemIcon.getStyleClass().add("icon-secondary");
+            item.setGraphic(menuItemIcon);
             item.setSelected(inGroup);
             item.setOnAction(ev -> {
                 if (item.isSelected()) {

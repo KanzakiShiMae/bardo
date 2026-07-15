@@ -23,6 +23,10 @@
     -fx-background-color: bardo-bg;
 }
 
+/* ── Ikonli icon color classes ────────────────── */
+.icon-primary   { -fx-icon-color: bardo-text; }
+.icon-secondary { -fx-icon-color: bardo-text-muted; }
+
 /* ── Title bar ────────────────────────────────── */
 .title-bar {
     -fx-background-color: bardo-bg;

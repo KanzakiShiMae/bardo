@@ -154,7 +154,7 @@
                     <Label fx:id="nowPlayingArtist" text="–"
                            styleClass="np-artist" />
                 </VBox>
-                <Button text="🔗" styleClass="np-like-btn" onAction="#onOpenInBrowser" />
+                <Button fx:id="btnOpenBrowser" text="🔗" styleClass="np-like-btn" onAction="#onOpenInBrowser" />
             </HBox>
 
             <!-- Controls + progress -->
@@ -177,7 +177,7 @@
                   style="-fx-padding: 0 20 0 0;">
                 <Button fx:id="btnShuffle" text="≋" styleClass="control-btn" />
                 <Button fx:id="btnRepeat"  text="↺" styleClass="control-btn" />
-                <Button text="⇆" styleClass="control-btn" onAction="#onSwitchFocusedPlayer" />
+                <Button fx:id="btnSwitchPlayer" text="⇆" styleClass="control-btn" onAction="#onSwitchFocusedPlayer" />
                 <Slider fx:id="volumeSlider" styleClass="volume-slider"
                         prefWidth="80" min="0" max="100" value="70" />
                 <Label fx:id="volumeLabel" text="70%" styleClass="volume-pct-label" />

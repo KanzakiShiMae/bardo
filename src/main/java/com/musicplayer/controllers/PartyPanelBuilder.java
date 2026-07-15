@@ -2,8 +2,13 @@ package com.musicplayer.controllers;
 
 import com.musicplayer.models.Song;
 import com.musicplayer.services.DownloadService;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import javafx.animation.*;
 import javafx.application.Platform;
+import javafx.stage.Popup;
 import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.geometry.Insets;
@@ -29,10 +34,15 @@ class PartyPanelBuilder {
         "#b2bec3", "#ffffff"
     };
 
-    private static final String[] EMOJIS = {
-        "🐱","🐶","🐺","🦊","🐻","🐼","🐨","🐯","🦁","🐸",
-        "🐵","🦋","🌸","⭐","🎵","🎮","🎯","🚀","🌈","❤️",
-        "😎","🤖","👾","🌙","🎸","🎤","🎧","🍕","🌮","🎃"
+    private static final org.kordamp.ikonli.Ikon[] AVATARS = {
+        BoxiconsSolid.HEART,     BoxiconsSolid.STAR,        BoxiconsSolid.CROWN,
+        BoxiconsSolid.DIAMOND,   BoxiconsSolid.TROPHY,      BoxiconsSolid.SHIELD,
+        BoxiconsSolid.BOLT,      BoxiconsSolid.ROCKET,      BoxiconsSolid.FLAME,
+        BoxiconsSolid.PLANET,    BoxiconsSolid.GIFT,        BoxiconsSolid.CAMERA,
+        BoxiconsSolid.MUSIC,     BoxiconsRegular.HEADPHONE, BoxiconsSolid.MOON,
+        BoxiconsSolid.SUN,       BoxiconsSolid.KEY,         BoxiconsSolid.BELL,
+        BoxiconsSolid.BOOKMARK,  BoxiconsSolid.USER,        BoxiconsSolid.COG,
+        BoxiconsSolid.COMPASS,   BoxiconsSolid.ZAP,         BoxiconsSolid.GHOST
     };
 
     private final MainController mc;
@@ -82,7 +92,6 @@ class PartyPanelBuilder {
     private VBox masterMemberListBox;
     private VBox masterChatBox;
     private ScrollPane masterChatScrollPane;
-    private javafx.scene.layout.Pane reactionOverlay;
 
     // ── Estado Listener ───────────────────────────────────────────────────────
     private PartyClient partyClient;
@@ -99,6 +108,7 @@ class PartyPanelBuilder {
     private final Map<String, String> knownSongs = new LinkedHashMap<>();
     private String pendingRefVideoId;
     private String pendingRefTitle;
+    private String currentListenerVideoId;
 
     PartyPanelBuilder(MainController mc, DownloadService downloadService) {
         this.mc = mc;
@@ -117,8 +127,10 @@ class PartyPanelBuilder {
     private void showLanding() {
         Preferences prefs = Preferences.userNodeForPackage(PartyPanelBuilder.class);
 
-        Label title = new Label("🎧  Party");
+        Label title = new Label("  Party");
         title.getStyleClass().add("section-title");
+        FontIcon titleIcon = new FontIcon(BoxiconsRegular.HEADPHONE); titleIcon.setIconSize(20); titleIcon.getStyleClass().add("icon-primary");
+        title.setGraphic(titleIcon);
 
         Label desc = new Label("Crea una sala y comparte el código con tus amigos para escuchar juntos en tiempo real.");
         desc.setWrapText(true);
@@ -126,8 +138,12 @@ class PartyPanelBuilder {
 
         // ── Selector de rol ───────────────────────────────────────────────────
         ToggleGroup roleGroup = new ToggleGroup();
-        ToggleButton createToggle = new ToggleButton("📡  Crear sala");
-        ToggleButton joinToggle   = new ToggleButton("🔗  Unirse a sala");
+        ToggleButton createToggle = new ToggleButton("  Crear sala");
+        ToggleButton joinToggle   = new ToggleButton("  Unirse a sala");
+        FontIcon createIco = new FontIcon(BoxiconsRegular.BROADCAST); createIco.setIconSize(14); createIco.getStyleClass().add("icon-secondary");
+        createToggle.setGraphic(createIco);
+        FontIcon joinIco = new FontIcon(BoxiconsRegular.LINK_ALT); joinIco.setIconSize(14); joinIco.getStyleClass().add("icon-secondary");
+        joinToggle.setGraphic(joinIco);
         createToggle.setToggleGroup(roleGroup);
         joinToggle.setToggleGroup(roleGroup);
         createToggle.getStyleClass().add("btn-secondary");
@@ -238,9 +254,9 @@ class PartyPanelBuilder {
                 @Override public void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle) {
                     PartyPanelBuilder.this.addMasterChatMessage(name, emoji, color, text, songRefVideoId, songRefTitle);
                 }
-                @Override public void onReaction(String name, String emoji, String color, String reaction) {
-                    PartyPanelBuilder.this.addMasterReaction(name, emoji, color, reaction);
-                    PartyPanelBuilder.this.showReactionAnimation(emoji, reaction);
+                @Override public void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle) {
+                    PartyPanelBuilder.this.addMasterReaction(name, emoji, color, reaction, songRefVideoId, songRefTitle);
+                    mc.showSceneReaction(emoji, reaction);
                 }
             });
             partyServer.start();
@@ -257,12 +273,12 @@ class PartyPanelBuilder {
         String tunnelMode = prefs.get("party.tunnel.mode", "upnp");
         switch (tunnelMode) {
             case "serveo" -> {
-                Platform.runLater(() -> { if (upnpStatusLbl != null) upnpStatusLbl.setText("🔄 Conectando con serveo.net…"); });
+                Platform.runLater(() -> { if (upnpStatusLbl != null) upnpStatusLbl.setText(" Conectando con serveo.net…"); });
                 Thread th = new Thread(() -> runServeoTunnel(port), "party-tunnel");
                 th.setDaemon(true); th.start();
             }
             case "bore" -> {
-                Platform.runLater(() -> { if (upnpStatusLbl != null) upnpStatusLbl.setText("🔄 Preparando bore.pub…"); });
+                Platform.runLater(() -> { if (upnpStatusLbl != null) upnpStatusLbl.setText(" Preparando bore.pub…"); });
                 Thread th = new Thread(() -> runBoreTunnel(port), "party-tunnel");
                 th.setDaemon(true); th.start();
             }
@@ -276,9 +292,9 @@ class PartyPanelBuilder {
                         if (upnpOk) {
                             String extIp = upnpResult.substring(0, upnpResult.lastIndexOf(':'));
                             masterCodeLbl.setText(RoomCode.encode(extIp, port));
-                            upnpStatusLbl.setText("✅ Acceso remoto activo (UPnP)");
+                            upnpStatusLbl.setText(" Acceso remoto activo (UPnP)");
                         } else {
-                            upnpStatusLbl.setText("⚠ UPnP no disponible — solo red local");
+                            upnpStatusLbl.setText(" UPnP no disponible — solo red local");
                         }
                     });
                 }, "party-upnp");
@@ -288,42 +304,91 @@ class PartyPanelBuilder {
         }
     }
 
+    private static FontIcon avatarFi(String desc, int size, String colorHex) {
+        FontIcon fi = new FontIcon(desc); fi.setIconSize(size);
+        fi.setIconColor(javafx.scene.paint.Color.web(colorHex));
+        return fi;
+    }
+
     private void updateMasterMemberList() {
         if (masterMemberListBox == null) return;
         masterMemberListBox.getChildren().clear();
         if (listenerEmojis.isEmpty()) {
             Label ph = new Label("Sin listeners conectados");
             ph.getStyleClass().add("greeting-sub");
-            ph.setStyle("-fx-font-size: 11px;");
+            ph.setStyle("-fx-font-size: 11px; -fx-text-fill: #636e72;");
             masterMemberListBox.getChildren().add(ph);
         } else {
             for (Map.Entry<String, String> entry : listenerEmojis.entrySet()) {
-                String memberColor = listenerColors.getOrDefault(entry.getKey(), "#a090b0");
-                Label lbl = new Label(entry.getValue() + "  " + entry.getKey() + "  " + entry.getValue());
-                lbl.getStyleClass().add("greeting-sub");
-                lbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 13px; -fx-text-fill: " + memberColor + ";");
-                masterMemberListBox.getChildren().add(lbl);
+                String memberName  = entry.getKey();
+                String memberEmoji = entry.getValue();
+                String memberColor = listenerColors.getOrDefault(memberName, "#a090b0");
+
+                Label dot = new Label("●");
+                dot.setStyle("-fx-font-size: 9px; -fx-text-fill: " + memberColor + ";");
+
+                Label lbl = new Label("  " + memberName);
+                lbl.setGraphic(avatarFi(memberEmoji, 15, memberColor));
+                lbl.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: " + memberColor + ";");
+                HBox.setHgrow(lbl, Priority.ALWAYS);
+
+                Button moreBtn = new Button();
+                moreBtn.getStyleClass().add("btn-secondary");
+                moreBtn.setStyle("-fx-padding: 1 7;");
+                MainController.ico(moreBtn, BoxiconsRegular.DOTS_HORIZONTAL_ROUNDED, 14, false);
+                moreBtn.setOpacity(0);
+                moreBtn.setOnAction(e -> {
+                    ContextMenu cm = new ContextMenu();
+                    MenuItem kickItem = new MenuItem("Expulsar");
+                    FontIcon kickIco = new FontIcon(BoxiconsRegular.USER_X); kickIco.setIconSize(13); kickIco.getStyleClass().add("icon-secondary");
+                    kickItem.setGraphic(kickIco);
+                    kickItem.setOnAction(ev -> { if (partyServer != null) partyServer.kickClient(memberName); });
+                    MenuItem banItem  = new MenuItem("Banear");
+                    FontIcon banIco = new FontIcon(BoxiconsRegular.BLOCK); banIco.setIconSize(13); banIco.getStyleClass().add("icon-secondary");
+                    banItem.setGraphic(banIco);
+                    banItem.setOnAction(ev  -> { if (partyServer != null) partyServer.banClient(memberName); });
+                    cm.getItems().addAll(kickItem, banItem);
+                    Platform.runLater(() -> cm.show(moreBtn, javafx.geometry.Side.BOTTOM, 0, 0));
+                });
+
+                String rowBase = "-fx-background-color: rgba(255,255,255,0.04); -fx-background-radius: 6; -fx-padding: 4 8;";
+                String rowHover = "-fx-background-color: rgba(255,255,255,0.09); -fx-background-radius: 6; -fx-padding: 4 8;";
+                HBox row = new HBox(8, dot, lbl, moreBtn);
+                row.setAlignment(Pos.CENTER_LEFT);
+                row.setStyle(rowBase);
+                row.setOnMouseEntered(e -> { moreBtn.setOpacity(1.0); row.setStyle(rowHover); });
+                row.setOnMouseExited(e  -> { moreBtn.setOpacity(0.0); row.setStyle(rowBase);  });
+                masterMemberListBox.getChildren().add(row);
             }
         }
     }
 
     private void addMasterChatMessage(String name, String emoji, String nameColor, String text, String songRefVideoId, String songRefTitle) {
         if (masterChatBox == null) return;
-        VBox bubble = new VBox(2);
-        bubble.setPadding(new Insets(3, 8, 3, 8));
-        Label header = new Label(emoji + "  " + name);
-        header.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
+        boolean isMaster = "Master".equals(name);
+        Label header = new Label("  " + name);
+        header.setGraphic(avatarFi(emoji, 13, nameColor));
+        header.setStyle("-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
+        VBox bubble = new VBox(4);
+        bubble.setPadding(new Insets(6, 10, 6, 12));
+        bubble.setStyle(
+            "-fx-background-color: " + (isMaster ? "rgba(84,160,255,0.10)" : "rgba(255,255,255,0.04)") + ";" +
+            "-fx-background-radius: 0 8 8 8;" +
+            "-fx-border-color: " + nameColor + "; -fx-border-width: 0 0 0 3; -fx-border-radius: 0 8 8 8;"
+        );
         bubble.getChildren().add(header);
         if (songRefVideoId != null && !songRefVideoId.isEmpty()) {
-            Label ref = new Label("🎵  " + songRefTitle);
-            ref.setStyle("-fx-background-color: -fx-background; -fx-padding: 2 6; -fx-background-radius: 4; -fx-font-size: 11px;");
-            ref.getStyleClass().add("greeting-sub");
+            Label ref = new Label("  " + songRefTitle);
+            ref.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 11));
+            ref.setStyle("-fx-font-size: 11px; -fx-text-fill: #b2bec3;" +
+                "-fx-background-color: rgba(255,255,255,0.08); -fx-background-radius: 4; -fx-padding: 2 8;");
             ref.setWrapText(true);
             bubble.getChildren().add(ref);
         }
         if (text != null && !text.isEmpty()) {
             Label textLbl = new Label(text);
             textLbl.setWrapText(true);
+            textLbl.setStyle("-fx-font-size: 12px;");
             textLbl.getStyleClass().add("greeting-sub");
             bubble.getChildren().add(textLbl);
         }
@@ -332,49 +397,53 @@ class PartyPanelBuilder {
             Platform.runLater(() -> masterChatScrollPane.setVvalue(1.0));
     }
 
-    private void showReactionAnimation(String listenerEmoji, String reaction) {
-        if (reactionOverlay == null) return;
-        Label lbl = new Label(listenerEmoji + reaction);
-        lbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 26px;");
-        Platform.runLater(() -> {
-            double w = reactionOverlay.getWidth();
-            double h = reactionOverlay.getHeight();
-            lbl.setLayoutX(Math.max(4, w - 70 + (Math.random() * 40 - 20)));
-            lbl.setLayoutY(Math.max(10, h - 70));
-            reactionOverlay.getChildren().add(lbl);
-            TranslateTransition up = new TranslateTransition(Duration.seconds(2), lbl);
-            up.setByY(-110);
-            FadeTransition fade = new FadeTransition(Duration.seconds(2), lbl);
-            fade.setFromValue(1.0); fade.setToValue(0.0);
-            ParallelTransition anim = new ParallelTransition(up, fade);
-            anim.setOnFinished(ev -> reactionOverlay.getChildren().remove(lbl));
-            anim.play();
-        });
-    }
 
-    private void addMasterReaction(String name, String emoji, String nameColor, String reaction) {
+    private void addMasterReaction(String name, String emoji, String nameColor, String reaction, String songRefVideoId, String songRefTitle) {
         if (masterChatBox == null) return;
-        VBox bubble = new VBox(2);
-        bubble.setPadding(new Insets(3, 8, 3, 8));
-        Label header = new Label(emoji + "  " + name);
-        header.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
+        Label sender = new Label("  " + name);
+        sender.setGraphic(avatarFi(emoji, 13, nameColor));
+        sender.setStyle("-fx-font-size: 11px; -fx-text-fill: " + nameColor + ";");
         Label reactionLbl = new Label(reaction);
-        reactionLbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 22px; -fx-text-fill: #e74c3c;");
-        bubble.getChildren().addAll(header, reactionLbl);
+        reactionLbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 20px;");
+        VBox bubble = new VBox(2, sender);
+        bubble.setPadding(new Insets(4, 10, 4, 12));
+        bubble.setStyle(
+            "-fx-background-color: rgba(255,255,255,0.04); -fx-background-radius: 0 8 8 8;" +
+            "-fx-border-color: " + nameColor + "; -fx-border-width: 0 0 0 3; -fx-border-radius: 0 8 8 8;"
+        );
+        if (songRefVideoId != null && !songRefVideoId.isEmpty()) {
+            Label ref = new Label("  " + songRefTitle);
+            ref.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 11));
+            ref.setStyle("-fx-font-size: 11px; -fx-text-fill: #b2bec3;" +
+                "-fx-background-color: rgba(255,255,255,0.08); -fx-background-radius: 4; -fx-padding: 2 8;");
+            ref.setWrapText(true);
+            bubble.getChildren().add(ref);
+        }
+        bubble.getChildren().add(reactionLbl);
         masterChatBox.getChildren().add(bubble);
         if (masterChatScrollPane != null)
             Platform.runLater(() -> masterChatScrollPane.setVvalue(1.0));
     }
 
-    private void addListenerReaction(String name, String emoji, String nameColor, String reaction) {
+    private void addListenerReaction(String name, String emoji, String nameColor, String reaction, String songRefVideoId, String songRefTitle) {
         if (listenerChatBox == null) return;
         VBox bubble = new VBox(2);
         bubble.setPadding(new Insets(3, 8, 3, 8));
-        Label header = new Label(emoji + "  " + name);
-        header.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
+        Label header = new Label("  " + name);
+        header.setGraphic(avatarFi(emoji, 13, nameColor));
+        header.setStyle("-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
+        bubble.getChildren().add(header);
+        if (songRefVideoId != null && !songRefVideoId.isEmpty()) {
+            Label ref = new Label("  " + songRefTitle);
+            ref.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 11));
+            ref.setStyle("-fx-background-color: -fx-background; -fx-padding: 2 6; -fx-background-radius: 4; -fx-font-size: 11px;");
+            ref.getStyleClass().add("greeting-sub");
+            ref.setWrapText(true);
+            bubble.getChildren().add(ref);
+        }
         Label reactionLbl = new Label(reaction);
-        reactionLbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 22px; -fx-text-fill: #e74c3c;");
-        bubble.getChildren().addAll(header, reactionLbl);
+        reactionLbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 22px;");
+        bubble.getChildren().add(reactionLbl);
         listenerChatBox.getChildren().add(bubble);
         if (listenerChatScrollPane != null)
             Platform.runLater(() -> listenerChatScrollPane.setVvalue(1.0));
@@ -384,11 +453,13 @@ class PartyPanelBuilder {
         if (listenerChatBox == null) return;
         VBox bubble = new VBox(2);
         bubble.setPadding(new Insets(3, 8, 3, 8));
-        Label header = new Label(emoji + "  " + name);
-        header.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
+        Label header = new Label("  " + name);
+        header.setGraphic(avatarFi(emoji, 13, nameColor));
+        header.setStyle("-fx-font-size: 11px; -fx-font-weight: bold; -fx-text-fill: " + nameColor + ";");
         bubble.getChildren().add(header);
         if (songRefVideoId != null && !songRefVideoId.isEmpty()) {
-            Label ref = new Label("🎵  " + songRefTitle);
+            Label ref = new Label("  " + songRefTitle);
+            ref.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 11));
             ref.setStyle("-fx-background-color: -fx-background; -fx-padding: 2 6; -fx-background-radius: 4; -fx-font-size: 11px;");
             ref.getStyleClass().add("greeting-sub");
             ref.setWrapText(true);
@@ -412,6 +483,7 @@ class PartyPanelBuilder {
         if (sharedSongs.isEmpty()) {
             Label ph = new Label("Aún no has añadido ninguna canción.");
             ph.getStyleClass().add("greeting-sub");
+            ph.setStyle("-fx-text-fill: #636e72; -fx-font-size: 12px;");
             songListBox.getChildren().add(ph);
             return;
         }
@@ -420,121 +492,207 @@ class PartyPanelBuilder {
             LinkedHashMap<String, PartyServer.ListenerStatus> statuses =
                 songStatus.getOrDefault(shared.videoId, new LinkedHashMap<>());
 
+            // ── Título ────────────────────────────────────────────────────────
             Label titleLbl = new Label(shared.title);
             titleLbl.getStyleClass().add("song-title");
+            titleLbl.setWrapText(false);
+            titleLbl.setEllipsisString("…");
             titleLbl.setMaxWidth(Double.MAX_VALUE);
+            titleLbl.setMinWidth(0);
             HBox.setHgrow(titleLbl, Priority.ALWAYS);
 
-            HBox emojisBox = new HBox(4);
-            emojisBox.setAlignment(Pos.CENTER_LEFT);
+            // ── Indicadores de estado de listeners ────────────────────────────
+            HBox statusBox = new HBox(4);
+            statusBox.setAlignment(Pos.CENTER_LEFT);
             boolean anyDownloading = false;
 
             for (Map.Entry<String, PartyServer.ListenerStatus> entry : statuses.entrySet()) {
-                String em = listenerEmojis.getOrDefault(entry.getKey(), "🎵");
+                String em = listenerEmojis.getOrDefault(entry.getKey(), BoxiconsSolid.MUSIC.getDescription());
                 PartyServer.ListenerStatus st = entry.getValue();
                 if (st == PartyServer.ListenerStatus.DOWNLOADING) anyDownloading = true;
-                String color = switch (st) {
-                    case READY       -> "#27ae60";
-                    case DOWNLOADING -> "#f39c12";
-                    case ERROR       -> "#c0392b";
-                    default          -> "#888888";
-                };
-                Label emojiLbl = new Label(em);
-                emojiLbl.setStyle("-fx-font-size: 15px; -fx-underline: true; -fx-text-fill: " + color + ";");
-                emojisBox.getChildren().add(emojiLbl);
+                org.kordamp.ikonli.Ikon statusIkon = switch (st) { case READY -> BoxiconsRegular.CHECK_CIRCLE; case DOWNLOADING -> BoxiconsSolid.DOWNLOAD; case ERROR -> BoxiconsRegular.X_CIRCLE; default -> BoxiconsRegular.TIME; };
+                String color = switch (st) { case READY -> "#00b894"; case DOWNLOADING -> "#fdcb6e"; case ERROR -> "#e17055"; default -> "#636e72"; };
+                FontIcon emIco = avatarFi(em, 13, color);
+                FontIcon stIcon = new FontIcon(statusIkon); stIcon.setIconSize(11); stIcon.setIconColor(javafx.scene.paint.Color.web(color));
+                HBox chip = new HBox(2, emIco, stIcon);
+                chip.setStyle("-fx-background-color: rgba(255,255,255,0.07); -fx-background-radius: 4; -fx-padding: 1 5;");
+                chip.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+                statusBox.getChildren().add(chip);
             }
 
-            Button hideToggleBtn = new Button(shared.hidden ? "🙈" : "👁");
+            // ── Botones ───────────────────────────────────────────────────────
+            Button hideToggleBtn = new Button();
             hideToggleBtn.getStyleClass().add("btn-secondary");
-            hideToggleBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 6;");
-            hideToggleBtn.setTooltip(new Tooltip(shared.hidden ? "Canción oculta para listeners" : "Canción visible para listeners"));
+            hideToggleBtn.setStyle("-fx-padding: 2 7;");
+            MainController.ico(hideToggleBtn, shared.hidden ? BoxiconsRegular.HIDE : BoxiconsRegular.SHOW, 14, false);
+            hideToggleBtn.setTooltip(new Tooltip(shared.hidden ? "Oculto para listeners" : "Visible para listeners"));
             hideToggleBtn.setOnAction(e -> {
                 shared.hidden = !shared.hidden;
-                hideToggleBtn.setText(shared.hidden ? "🙈" : "👁");
-                hideToggleBtn.getTooltip().setText(shared.hidden ? "Canción oculta para listeners" : "Canción visible para listeners");
+                MainController.ico(hideToggleBtn, shared.hidden ? BoxiconsRegular.HIDE : BoxiconsRegular.SHOW, 14, false);
+                hideToggleBtn.getTooltip().setText(shared.hidden ? "Oculto para listeners" : "Visible para listeners");
             });
 
-            Button playPartyBtn = new Button("▶");
+            Button redownloadBtn = new Button();
+            redownloadBtn.getStyleClass().add("btn-secondary");
+            redownloadBtn.setStyle("-fx-padding: 2 7;");
+            MainController.ico(redownloadBtn, BoxiconsRegular.REFRESH, 14, false);
+            redownloadBtn.setTooltip(new Tooltip("Reenviar descarga a listeners"));
+            redownloadBtn.setOnAction(e -> { if (partyServer != null) partyServer.broadcastRedownload(shared.videoId); });
+
+            Button deleteBtn = new Button();
+            deleteBtn.getStyleClass().add("btn-secondary");
+            deleteBtn.setStyle("-fx-padding: 2 7;");
+            MainController.ico(deleteBtn, BoxiconsSolid.TRASH, 14, false);
+            deleteBtn.setTooltip(new Tooltip("Eliminar canción de la sala"));
+            deleteBtn.setOnAction(e -> {
+                sharedSongs.remove(shared);
+                songStatus.remove(shared.videoId);
+                if (partyServer != null) partyServer.broadcastRemoveTrack(shared.videoId);
+                refreshSongList();
+            });
+
+            Button playPartyBtn = new Button("  Abrir");
             playPartyBtn.getStyleClass().add("btn-secondary");
-            playPartyBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 8;");
+            playPartyBtn.setStyle("-fx-font-size: 11px; -fx-padding: 2 10;");
+            MainController.ico(playPartyBtn, BoxiconsRegular.PLAY, 12, true);
             playPartyBtn.setDisable(anyDownloading);
             playPartyBtn.setOnAction(e -> {
                 if (partyServer != null) partyServer.broadcastOpen(shared.videoId, shared.hidden);
                 mc.openMasterPartyPlayer(shared.song);
             });
 
-            HBox row = new HBox(8, titleLbl, emojisBox, hideToggleBtn, playPartyBtn);
-            row.setAlignment(Pos.CENTER_LEFT);
-            row.setPadding(new Insets(4, 8, 4, 8));
-            row.getStyleClass().add("detail-song-row");
-            songListBox.getChildren().add(row);
+            HBox buttonsRow = new HBox(5, hideToggleBtn, redownloadBtn, deleteBtn, playPartyBtn);
+            buttonsRow.setAlignment(Pos.CENTER_RIGHT);
+            buttonsRow.setMinWidth(Region.USE_PREF_SIZE);
+
+            HBox topRow = new HBox(8, titleLbl, buttonsRow);
+            topRow.setAlignment(Pos.CENTER_LEFT);
+
+            VBox card = new VBox(5, topRow);
+            if (!statusBox.getChildren().isEmpty()) card.getChildren().add(statusBox);
+            card.setStyle("-fx-background-color: rgba(255,255,255,0.05); -fx-background-radius: 8; -fx-padding: 9 12;");
+            songListBox.getChildren().add(card);
         }
     }
 
     private void showMasterPanel(String initialCode, String roomName) {
-        Label titleLbl = new Label("📡  " + roomName);
+
+        // ── Título ────────────────────────────────────────────────────────────
+        Label titleLbl = new Label("  " + roomName);
         titleLbl.getStyleClass().add("section-title");
+        FontIcon masterTitleIcon = new FontIcon(BoxiconsRegular.BROADCAST); masterTitleIcon.setIconSize(20); masterTitleIcon.getStyleClass().add("icon-primary");
+        titleLbl.setGraphic(masterTitleIcon);
+
+        // ── Sección izquierda: código de sala ─────────────────────────────────
+        Label codeHeaderLbl = new Label("CÓDIGO DE SALA");
+        codeHeaderLbl.getStyleClass().add("sidebar-section-label");
 
         masterCodeLbl = new Label(initialCode);
-        masterCodeLbl.setStyle("-fx-font-family: monospace; -fx-font-size: 13px;");
+        masterCodeLbl.setStyle(
+            "-fx-font-family: 'Consolas','Courier New',monospace;" +
+            "-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #a29bfe;"
+        );
+        masterCodeLbl.setWrapText(false);
 
-        Button copyBtn = new Button("📋  Copiar");
+        Button copyBtn = new Button();
         copyBtn.getStyleClass().add("btn-secondary");
+        MainController.ico(copyBtn, BoxiconsSolid.COPY, 14, false);
+        copyBtn.setTooltip(new Tooltip("Copiar código"));
         copyBtn.setOnAction(e -> {
             ClipboardContent c = new ClipboardContent();
             c.putString(masterCodeLbl.getText());
             Clipboard.getSystemClipboard().setContent(c);
-            copyBtn.setText("✅ Copiado");
+            MainController.ico(copyBtn, BoxiconsRegular.CHECK, 14, false);
             PauseTransition reset = new PauseTransition(Duration.seconds(2));
-            reset.setOnFinished(ev -> copyBtn.setText("📋  Copiar"));
+            reset.setOnFinished(ev -> MainController.ico(copyBtn, BoxiconsSolid.COPY, 14, false));
             reset.play();
         });
 
-        HBox codeRow = new HBox(10, masterCodeLbl, copyBtn);
-        codeRow.setAlignment(Pos.CENTER_LEFT);
+        HBox codeValueRow = new HBox(8, masterCodeLbl, copyBtn);
+        codeValueRow.setAlignment(Pos.CENTER_LEFT);
 
-        upnpStatusLbl = new Label("🔄 Conectando…");
+        upnpStatusLbl = new Label(" Conectando…");
+        FontIcon upnpIcon = new FontIcon(BoxiconsRegular.BROADCAST); upnpIcon.setIconSize(12); upnpIcon.getStyleClass().add("icon-secondary");
+        upnpStatusLbl.setGraphic(upnpIcon);
         upnpStatusLbl.getStyleClass().add("greeting-sub");
-        upnpStatusLbl.setStyle("-fx-font-size: 11px;");
+        upnpStatusLbl.setStyle("-fx-font-size: 11px; -fx-text-fill: #b2bec3;");
 
-        // ── Listeners conectados ──────────────────────────────────────────────
+        VBox codeSection = new VBox(7, codeHeaderLbl, codeValueRow, upnpStatusLbl);
+        codeSection.setStyle(
+            "-fx-background-color: rgba(162,155,254,0.08);" +
+            "-fx-background-radius: 10; -fx-padding: 12 14;" +
+            "-fx-border-color: rgba(162,155,254,0.22); -fx-border-radius: 10; -fx-border-width: 1;"
+        );
+        codeSection.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(codeSection, Priority.ALWAYS);
+
+        // ── Sección derecha: listeners ────────────────────────────────────────
         Label membersHeader = new Label("LISTENERS");
         membersHeader.getStyleClass().add("sidebar-section-label");
-        masterMemberListBox = new VBox(3);
+
+        masterMemberListBox = new VBox(4);
         Label memberPh = new Label("Sin listeners conectados");
         memberPh.getStyleClass().add("greeting-sub");
-        memberPh.setStyle("-fx-font-size: 11px;");
+        memberPh.setStyle("-fx-font-size: 11px; -fx-text-fill: #636e72;");
         masterMemberListBox.getChildren().add(memberPh);
 
-        // ── Canciones ─────────────────────────────────────────────────────────
-        Label songsHeader = new Label("CANCIONES");
+        ScrollPane membersScroll = new ScrollPane(masterMemberListBox);
+        membersScroll.setFitToWidth(true);
+        membersScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        membersScroll.getStyleClass().add("results-scroll");
+        membersScroll.setMinHeight(40);
+        membersScroll.setPrefHeight(90);
+        membersScroll.setMaxHeight(Double.MAX_VALUE);
+        VBox.setVgrow(membersScroll, Priority.ALWAYS);
+
+        VBox membersSection = new VBox(7, membersHeader, membersScroll);
+        membersSection.setStyle(
+            "-fx-background-color: rgba(255,255,255,0.03);" +
+            "-fx-background-radius: 10; -fx-padding: 12 14;" +
+            "-fx-border-color: rgba(255,255,255,0.07); -fx-border-radius: 10; -fx-border-width: 1;"
+        );
+        membersSection.setMaxWidth(Double.MAX_VALUE);
+        HBox.setHgrow(membersSection, Priority.ALWAYS);
+
+        // Fila superior: código a la izquierda, listeners a la derecha
+        HBox topRow = new HBox(10, codeSection, membersSection);
+        topRow.setFillHeight(true);
+
+        // ── Panel de canciones (mitad izquierda del SplitPane) ────────────────
+        Label songsHeader = new Label("CANCIONES EN SALA");
         songsHeader.getStyleClass().add("sidebar-section-label");
 
-        songListBox = new VBox(4);
+        songListBox = new VBox(6);
+        songListBox.setPadding(new Insets(2, 0, 2, 0));
         Label songPh = new Label("Aún no has añadido ninguna canción.");
         songPh.getStyleClass().add("greeting-sub");
+        songPh.setStyle("-fx-text-fill: #636e72; -fx-font-size: 12px;");
         songListBox.getChildren().add(songPh);
 
         ScrollPane songsScroll = new ScrollPane(songListBox);
         songsScroll.setFitToWidth(true);
         songsScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         songsScroll.getStyleClass().add("results-scroll");
-        songsScroll.setPrefHeight(150);
+        VBox.setVgrow(songsScroll, Priority.ALWAYS);
 
-        // ── Chat ─────────────────────────────────────────────────────────────
+        VBox songsPane = new VBox(8, songsHeader, songsScroll);
+        songsPane.setPadding(new Insets(10, 12, 8, 12));
+        songsPane.setMinWidth(140);
+
+        // ── Panel de chat (mitad derecha del SplitPane) ───────────────────────
         Label chatHeader = new Label("CHAT");
         chatHeader.getStyleClass().add("sidebar-section-label");
-        masterChatBox = new VBox(4);
+
+        masterChatBox = new VBox(3);
         masterChatBox.setPadding(new Insets(4));
         masterChatScrollPane = new ScrollPane(masterChatBox);
         masterChatScrollPane.setFitToWidth(true);
         masterChatScrollPane.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         masterChatScrollPane.getStyleClass().add("results-scroll");
-        masterChatScrollPane.setPrefHeight(130);
         VBox.setVgrow(masterChatScrollPane, Priority.ALWAYS);
 
         TextField masterChatInput = new TextField();
-        masterChatInput.setPromptText("Escribe un mensaje como Master…");
+        masterChatInput.setPromptText("Mensaje como Master…");
         masterChatInput.getStyleClass().add("detail-search-field");
         HBox.setHgrow(masterChatInput, Priority.ALWAYS);
 
@@ -545,7 +703,7 @@ class PartyPanelBuilder {
             String text = masterChatInput.getText().trim();
             if (text.isEmpty()) return;
             if (partyServer != null) partyServer.broadcastMasterChat(text);
-            addMasterChatMessage("Master", "📡", "#54a0ff", text, null, null);
+            addMasterChatMessage("Master", BoxiconsRegular.BROADCAST.getDescription(), "#54a0ff", text, null, null);
             masterChatInput.clear();
         };
         masterChatInput.setOnAction(e -> masterSend.run());
@@ -553,12 +711,25 @@ class PartyPanelBuilder {
 
         HBox masterInputRow = new HBox(6, masterChatInput, masterSendBtn);
         masterInputRow.setAlignment(Pos.CENTER_LEFT);
+        masterInputRow.setPadding(new Insets(6, 0, 0, 0));
+
+        VBox chatPane = new VBox(8, chatHeader, masterChatScrollPane, masterInputRow);
+        chatPane.setPadding(new Insets(10, 12, 10, 12));
+        chatPane.setMinWidth(140);
+
+        // ── SplitPane horizontal: canciones | chat ────────────────────────────
+        SplitPane splitPane = new SplitPane(songsPane, chatPane);
+        splitPane.setOrientation(javafx.geometry.Orientation.HORIZONTAL);
+        splitPane.setDividerPositions(0.50);
+        splitPane.setMinHeight(200);
+        VBox.setVgrow(splitPane, Priority.ALWAYS);
 
         // ── Cerrar sala ───────────────────────────────────────────────────────
-        Button closeBtn = new Button("⏹  Cerrar sala");
+        Button closeBtn = new Button("  Cerrar sala");
         closeBtn.getStyleClass().add("btn-secondary");
         closeBtn.setMaxWidth(Double.MAX_VALUE);
-        closeBtn.setStyle("-fx-background-color: #c0392b; -fx-text-fill: white;");
+        closeBtn.setStyle("-fx-background-color: rgba(192,57,43,0.85); -fx-text-fill: white; -fx-font-weight: bold;");
+        MainController.ico(closeBtn, BoxiconsRegular.STOP_CIRCLE, 14, false);
         closeBtn.setOnAction(e -> {
             if (partyServer != null) partyServer.broadcastRoomClosed();
             if (upnpHelper != null) {
@@ -570,25 +741,16 @@ class PartyPanelBuilder {
             if (partyServer != null) { partyServer.stop(); partyServer = null; }
             masterActive.set(false);
             masterCodeLbl = null; upnpStatusLbl = null; songListBox = null;
-            masterMemberListBox = null; masterChatBox = null; masterChatScrollPane = null; reactionOverlay = null;
+            masterMemberListBox = null; masterChatBox = null; masterChatScrollPane = null;
             sharedSongs.clear(); listenerEmojis.clear(); listenerColors.clear(); songStatus.clear();
             showLanding();
         });
 
-        VBox content = new VBox(10,
-            titleLbl, codeRow, upnpStatusLbl,
-            new Separator(), membersHeader, masterMemberListBox,
-            new Separator(), songsHeader, songsScroll,
-            new Separator(), chatHeader, masterChatScrollPane, masterInputRow,
-            new Separator(), closeBtn
-        );
-        content.setPadding(new Insets(4));
-
-        reactionOverlay = new javafx.scene.layout.Pane();
-        reactionOverlay.setMouseTransparent(true);
-        reactionOverlay.setPickOnBounds(false);
-
-        root.getChildren().setAll(new StackPane(content, reactionOverlay));
+        // ── Ensamblado ────────────────────────────────────────────────────────
+        VBox content = new VBox(10, titleLbl, topRow, splitPane, closeBtn);
+        VBox.setVgrow(splitPane, Priority.ALWAYS);
+        VBox.setVgrow(content, Priority.ALWAYS);
+        root.getChildren().setAll(content);
     }
 
     // ── Listener ──────────────────────────────────────────────────────────────
@@ -596,10 +758,17 @@ class PartyPanelBuilder {
     private void showJoinForm() {
         Preferences prefs = Preferences.userNodeForPackage(PartyPanelBuilder.class);
         String savedNick  = prefs.get("party.nickname", "");
-        String savedEmoji = prefs.get("party.emoji",    "🎵");
+        String defaultAvatarDesc = BoxiconsSolid.MUSIC.getDescription();
+        String savedEmoji = prefs.get("party.emoji", defaultAvatarDesc);
+        boolean savedValid = false;
+        for (org.kordamp.ikonli.Ikon ikon : AVATARS)
+            if (ikon.getDescription().equals(savedEmoji)) { savedValid = true; break; }
+        if (!savedValid) savedEmoji = defaultAvatarDesc;
 
-        Label titleLbl = new Label("🔗  Unirse a sala");
+        Label titleLbl = new Label("  Unirse a sala");
         titleLbl.getStyleClass().add("section-title");
+        FontIcon joinTitleIcon = new FontIcon(BoxiconsRegular.LINK_ALT); joinTitleIcon.setIconSize(20); joinTitleIcon.getStyleClass().add("icon-primary");
+        titleLbl.setGraphic(joinTitleIcon);
 
         Label nickHeader = new Label("NICKNAME");
         nickHeader.getStyleClass().add("sidebar-section-label");
@@ -610,20 +779,52 @@ class PartyPanelBuilder {
             if (n.length() > 20) nickFld.setText(n.substring(0, 20));
         });
 
-        Label emojiHeader = new Label("EMOJI");
+        Label emojiHeader = new Label("AVATAR");
         emojiHeader.getStyleClass().add("sidebar-section-label");
 
         String[] selectedEmoji = {savedEmoji};
-        ToggleGroup emojiGroup = new ToggleGroup();
-        FlowPane emojiPane = new FlowPane(4, 4);
-        for (String em : EMOJIS) {
-            ToggleButton btn = new ToggleButton(em);
-            btn.setToggleGroup(emojiGroup);
-            btn.setStyle("-fx-font-size: 18px; -fx-background-radius: 6; -fx-padding: 4 6;");
-            if (em.equals(savedEmoji)) btn.setSelected(true);
-            btn.selectedProperty().addListener((obs, o, n) -> { if (n) selectedEmoji[0] = em; });
-            emojiPane.getChildren().add(btn);
+
+        Button avatarBtn = new Button();
+        avatarBtn.getStyleClass().add("btn-secondary");
+        avatarBtn.setStyle("-fx-min-width: 48px; -fx-min-height: 48px;");
+        FontIcon avatarDisplay = new FontIcon(savedEmoji);
+        avatarDisplay.setIconSize(24); avatarDisplay.getStyleClass().add("icon-primary");
+        avatarBtn.setGraphic(avatarDisplay);
+
+        Popup avatarPicker = new Popup();
+        avatarPicker.setAutoHide(true);
+        VBox pickerRoot = new VBox();
+        pickerRoot.setStyle("-fx-background-color: #1e1a2e; -fx-background-radius: 8; -fx-padding: 8; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.6), 14, 0, 0, 4);");
+        FlowPane iconGrid = new FlowPane(4, 4);
+        iconGrid.setPrefWrapLength(240);
+        for (org.kordamp.ikonli.Ikon ikon : AVATARS) {
+            String desc = ikon.getDescription();
+            Button btn = new Button();
+            boolean sel = desc.equals(savedEmoji);
+            btn.setStyle("-fx-background-radius: 6; -fx-padding: 6; -fx-cursor: hand; -fx-background-color: " + (sel ? "rgba(162,155,254,0.3)" : "rgba(255,255,255,0.05)") + ";");
+            FontIcon fi = new FontIcon(ikon); fi.setIconSize(20);
+            btn.setGraphic(fi);
+            btn.setOnAction(ev -> {
+                selectedEmoji[0] = desc;
+                FontIcon newIco = new FontIcon(ikon); newIco.setIconSize(24); newIco.getStyleClass().add("icon-primary");
+                avatarBtn.setGraphic(newIco);
+                iconGrid.getChildren().forEach(n -> {
+                    if (n instanceof Button b && b.getGraphic() instanceof FontIcon) {
+                        boolean isThis = b == btn;
+                        b.setStyle("-fx-background-radius: 6; -fx-padding: 6; -fx-cursor: hand; -fx-background-color: " + (isThis ? "rgba(162,155,254,0.3)" : "rgba(255,255,255,0.05)") + ";");
+                    }
+                });
+                avatarPicker.hide();
+            });
+            iconGrid.getChildren().add(btn);
         }
+        pickerRoot.getChildren().add(iconGrid);
+        avatarPicker.getContent().add(pickerRoot);
+        avatarBtn.setOnAction(e -> {
+            if (avatarPicker.isShowing()) { avatarPicker.hide(); return; }
+            javafx.geometry.Bounds b = avatarBtn.localToScreen(avatarBtn.getBoundsInLocal());
+            if (b != null) avatarPicker.show(avatarBtn.getScene().getWindow(), b.getMinX(), b.getMaxY() + 4);
+        });
 
         Label colorHeader = new Label("COLOR");
         colorHeader.getStyleClass().add("sidebar-section-label");
@@ -685,15 +886,16 @@ class PartyPanelBuilder {
             }
         });
 
-        Button backBtn = new Button("← Volver");
+        Button backBtn = new Button("  Volver");
         backBtn.getStyleClass().add("btn-secondary");
         backBtn.setMaxWidth(Double.MAX_VALUE);
+        MainController.ico(backBtn, BoxiconsRegular.ARROW_BACK, 14, false);
         backBtn.setOnAction(e -> showLanding());
 
         VBox form = new VBox(10,
             titleLbl,
             nickHeader, nickFld,
-            emojiHeader, emojiPane,
+            emojiHeader, avatarBtn,
             colorHeader, colorPane,
             codeHeader, codeField,
             errorLbl, connectBtn, backBtn);
@@ -710,8 +912,10 @@ class PartyPanelBuilder {
     }
 
     private void connectAsListener(String host, int port, String nickname, String emoji, String color) {
-        Label connecting = new Label("🔗 Conectando…");
+        Label connecting = new Label(" Conectando…");
         connecting.getStyleClass().add("greeting-sub");
+        FontIcon connectingIcon = new FontIcon(BoxiconsRegular.LINK_ALT); connectingIcon.setIconSize(14); connectingIcon.getStyleClass().add("icon-secondary");
+        connecting.setGraphic(connectingIcon);
         root.getChildren().setAll(connecting);
 
         partyClient = new PartyClient(host, port, nickname, emoji, color, downloadService, new PartyClient.Callbacks() {
@@ -736,6 +940,7 @@ class PartyPanelBuilder {
                 if (song == null) return;
                 if (hidden) hiddenListenerTracks.add(videoId);
                 else hiddenListenerTracks.remove(videoId);
+                currentListenerVideoId = videoId;
                 partyPlayers.put(videoId, mc.partyLoadSong(song, hidden));
             }
             @Override public void onPlay(String videoId, long positionMs) {
@@ -777,6 +982,7 @@ class PartyPanelBuilder {
             }
             @Override public void onCloseTrack(String videoId) {
                 hiddenListenerTracks.remove(videoId);
+                if (videoId.equals(currentListenerVideoId)) currentListenerVideoId = null;
                 closePartyPlayerTab(videoId);
                 // pendingSongs se conserva: el master puede volver a abrir la misma canción
             }
@@ -785,7 +991,7 @@ class PartyPanelBuilder {
                 closeAllPartyPlayerTabs();
                 pendingSongs.clear();
                 hiddenListenerTracks.clear();
-                knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null;
+                knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null; currentListenerVideoId = null;
                 if (partyClient != null) { partyClient.disconnect(); partyClient = null; }
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
@@ -793,11 +999,42 @@ class PartyPanelBuilder {
                 mc.closeTabForced("party");
                 showLanding();
             }
+            @Override public void onKicked() {
+                closeAllPartyPlayerTabs();
+                pendingSongs.clear(); hiddenListenerTracks.clear();
+                knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null; currentListenerVideoId = null;
+                partyClient = null;
+                listenerTrackLbl = null; listenerSyncLbl = null;
+                listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+                PartyPanelBuilder.this.deletePartyDownloads();
+                mc.showToast("Has sido expulsado de la sala");
+                showJoinForm();
+            }
+            @Override public void onBanned() {
+                closeAllPartyPlayerTabs();
+                pendingSongs.clear(); hiddenListenerTracks.clear();
+                knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null; currentListenerVideoId = null;
+                partyClient = null;
+                listenerTrackLbl = null; listenerSyncLbl = null;
+                listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+                PartyPanelBuilder.this.deletePartyDownloads();
+                mc.showToast("Has sido baneado de esta sala");
+                showLanding();
+            }
+            @Override public void onRedownload(String videoId) {
+                Song song = pendingSongs.remove(videoId);
+                if (song != null) {
+                    String lp = song.getLocalFilePath();
+                    if (lp != null && !lp.isBlank()) {
+                        try { java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(lp)); } catch (Exception ignored) {}
+                    }
+                }
+            }
             @Override public void onDisconnected(String reason) {
                 closeAllPartyPlayerTabs();
                 pendingSongs.clear();
                 hiddenListenerTracks.clear();
-                knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null;
+                knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null; currentListenerVideoId = null;
                 partyClient = null;
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
@@ -811,8 +1048,21 @@ class PartyPanelBuilder {
             @Override public void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle) {
                 PartyPanelBuilder.this.addListenerChatMessage(name, emoji, color, text, songRefVideoId, songRefTitle);
             }
-            @Override public void onReaction(String name, String emoji, String color, String reaction) {
-                PartyPanelBuilder.this.addListenerReaction(name, emoji, color, reaction);
+            @Override public void onRemoveTrack(String videoId) {
+                closePartyPlayerTab(videoId);
+                Song song = pendingSongs.remove(videoId);
+                if (song != null) {
+                    String lp = song.getLocalFilePath();
+                    if (lp != null && !lp.isBlank()) {
+                        try { java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(lp)); } catch (Exception ignored) {}
+                    }
+                }
+                knownSongs.remove(videoId);
+                if (videoId.equals(currentListenerVideoId)) currentListenerVideoId = null;
+            }
+            @Override public void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle) {
+                PartyPanelBuilder.this.addListenerReaction(name, emoji, color, reaction, songRefVideoId, songRefTitle);
+                mc.showSceneReaction(emoji, reaction);
             }
             @Override public void onMembersUpdate(java.util.List<PartyClient.MemberInfo> members) {
                 if (listenerMemberListBox == null) return;
@@ -823,9 +1073,13 @@ class PartyPanelBuilder {
                     listenerMemberListBox.getChildren().add(ph);
                 } else {
                     for (PartyClient.MemberInfo m : members) {
-                        Label lbl = new Label(m.emoji() + "  " + m.name() + "  " + m.emoji());
+                        FontIcon leftIco  = avatarFi(m.emoji(), 14, m.color());
+                        FontIcon rightIco = avatarFi(m.emoji(), 14, m.color());
+                        Label nameLbl = new Label("  " + m.name() + "  ");
+                        nameLbl.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: " + m.color() + ";");
+                        HBox lbl = new HBox(2, leftIco, nameLbl, rightIco);
+                        lbl.setAlignment(Pos.CENTER_LEFT);
                         lbl.getStyleClass().add("greeting-sub");
-                        lbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 13px; -fx-text-fill: " + m.color() + ";");
                         listenerMemberListBox.getChildren().add(lbl);
                     }
                 }
@@ -838,10 +1092,13 @@ class PartyPanelBuilder {
     }
 
     private void showListenerPanel() {
-        Label titleLbl = new Label("🎧  En sala");
+        Label titleLbl = new Label("  En sala");
         titleLbl.getStyleClass().add("section-title");
+        FontIcon listenerTitleIcon = new FontIcon(BoxiconsRegular.HEADPHONE); listenerTitleIcon.setIconSize(20); listenerTitleIcon.getStyleClass().add("icon-primary");
+        titleLbl.setGraphic(listenerTitleIcon);
 
-        Label connLbl = new Label("✅ Conectado");
+        Label connLbl = new Label(" Conectado");
+        connLbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.CHECK_CIRCLE, BoxiconsRegular.CHECK_CIRCLE, 14));
         connLbl.getStyleClass().add("greeting-sub");
 
         // ── Miembros ──────────────────────────────────────────────────────────
@@ -856,7 +1113,9 @@ class PartyPanelBuilder {
         // ── Estado de reproducción ────────────────────────────────────────────
         Label syncHeader = new Label("ESTADO");
         syncHeader.getStyleClass().add("sidebar-section-label");
-        listenerSyncLbl = new Label("⏸ Esperando…");
+        listenerSyncLbl = new Label(" Esperando…");
+        FontIcon syncIcon = new FontIcon(BoxiconsRegular.PAUSE_CIRCLE); syncIcon.setIconSize(13); syncIcon.getStyleClass().add("icon-secondary");
+        listenerSyncLbl.setGraphic(syncIcon);
         listenerSyncLbl.getStyleClass().add("greeting-sub");
 
         // ── Chat ──────────────────────────────────────────────────────────────
@@ -874,6 +1133,7 @@ class PartyPanelBuilder {
         // Chip que muestra la canción referenciada antes de enviar
         Label refChip = new Label();
         refChip.setStyle("-fx-background-color: #2a2a3a; -fx-padding: 2 8; -fx-background-radius: 4; -fx-font-size: 11px; -fx-cursor: hand;");
+        refChip.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 11));
         refChip.setVisible(false); refChip.setManaged(false);
         refChip.setOnMouseClicked(ev -> {
             pendingRefVideoId = null; pendingRefTitle = null;
@@ -886,19 +1146,21 @@ class PartyPanelBuilder {
         chatInput.getStyleClass().add("detail-search-field");
         HBox.setHgrow(chatInput, Priority.ALWAYS);
 
-        Button refBtn = new Button("📎");
+        Button refBtn = new Button();
         refBtn.getStyleClass().add("btn-secondary");
-        refBtn.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 12px; -fx-padding: 5 8;");
+        refBtn.setStyle("-fx-padding: 5 8;");
+        MainController.ico(refBtn, BoxiconsRegular.PAPERCLIP, 14, false);
         refBtn.setVisible(false); refBtn.setManaged(false);
         refBtn.setOnAction(e -> {
             ContextMenu cm = new ContextMenu();
             for (Map.Entry<String, String> entry : knownSongs.entrySet()) {
                 if (hiddenListenerTracks.contains(entry.getKey())) continue;
-                MenuItem item = new MenuItem("🎵  " + entry.getValue());
+                MenuItem item = new MenuItem("  " + entry.getValue());
+                item.setGraphic(IkonUtil.duotone(BoxiconsSolid.MUSIC, BoxiconsRegular.MUSIC, 13));
                 item.setOnAction(ev -> {
                     pendingRefVideoId = entry.getKey();
                     pendingRefTitle = entry.getValue();
-                    refChip.setText("🎵  " + pendingRefTitle + "   ✕");
+                    refChip.setText("  " + pendingRefTitle + "   ✕");
                     refChip.setVisible(true); refChip.setManaged(true);
                 });
                 cm.getItems().add(item);
@@ -912,11 +1174,20 @@ class PartyPanelBuilder {
             Platform.runLater(() -> cm.show(refBtn, javafx.geometry.Side.BOTTOM, 0, 0));
         });
 
-        Button heartBtn = new Button("❤");
+        Button heartBtn = new Button();
         heartBtn.getStyleClass().add("btn-secondary");
-        heartBtn.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 16px; -fx-padding: 4 8; -fx-text-fill: #e74c3c;");
+        heartBtn.setStyle("-fx-padding: 4 8;");
+        MainController.ico(heartBtn, BoxiconsSolid.HEART, 16, false);
         heartBtn.setOnAction(e -> {
-            if (partyClient != null) partyClient.sendReaction("❤");
+            if (partyClient != null) {
+                String refVid = currentListenerVideoId;
+                String refTitle = null;
+                if (refVid != null) {
+                    Song s = pendingSongs.get(refVid);
+                    refTitle = (s != null) ? s.getTitle() : knownSongs.get(refVid);
+                }
+                partyClient.sendReaction("❤", refVid, refTitle);
+            }
         });
 
         Button sendBtn = new Button("Enviar");
@@ -937,10 +1208,11 @@ class PartyPanelBuilder {
         inputRow.setAlignment(Pos.CENTER_LEFT);
 
         // ── Salir ─────────────────────────────────────────────────────────────
-        Button leaveBtn = new Button("⏹  Salir de sala");
+        Button leaveBtn = new Button("  Salir de sala");
         leaveBtn.getStyleClass().add("btn-secondary");
         leaveBtn.setMaxWidth(Double.MAX_VALUE);
         leaveBtn.setStyle("-fx-background-color: #c0392b; -fx-text-fill: white;");
+        MainController.ico(leaveBtn, BoxiconsRegular.STOP_CIRCLE, 14, false);
         leaveBtn.setOnAction(e -> {
             if (partyClient != null) { partyClient.disconnect(); partyClient = null; }
             closeAllPartyPlayerTabs();
@@ -1015,7 +1287,7 @@ class PartyPanelBuilder {
                 }
             }
             if (found) Platform.runLater(() -> {
-                if (upnpStatusLbl != null) upnpStatusLbl.setText("⚠ Túnel desconectado");
+                if (upnpStatusLbl != null) upnpStatusLbl.setText(" Túnel desconectado");
             });
             return found;
         } catch (java.io.IOException ignored) {
@@ -1029,13 +1301,13 @@ class PartyPanelBuilder {
 
             if (!java.nio.file.Files.exists(boreExe)) {
                 Platform.runLater(() -> {
-                    if (upnpStatusLbl != null) upnpStatusLbl.setText("⬇ Descargando bore (~3 MB)…");
+                    if (upnpStatusLbl != null) upnpStatusLbl.setText(" Descargando bore (~3 MB)…");
                 });
                 downloadBore(boreExe);
             }
 
             Platform.runLater(() -> {
-                if (upnpStatusLbl != null) upnpStatusLbl.setText("🔄 Conectando con bore.pub…");
+                if (upnpStatusLbl != null) upnpStatusLbl.setText(" Conectando con bore.pub…");
             });
 
             ProcessBuilder pb = new ProcessBuilder(
@@ -1073,15 +1345,15 @@ class PartyPanelBuilder {
             Platform.runLater(() -> {
                 if (upnpStatusLbl == null) return;
                 if (wasFound) {
-                    upnpStatusLbl.setText("⚠ Túnel desconectado");
+                    upnpStatusLbl.setText(" Túnel desconectado");
                 } else {
-                    upnpStatusLbl.setText("❌ No se pudo establecer el túnel");
+                    upnpStatusLbl.setText(" No se pudo establecer el túnel");
                 }
             });
         } catch (Exception ex) {
             Platform.runLater(() -> {
                 if (upnpStatusLbl != null)
-                    upnpStatusLbl.setText("❌ Error: " + ex.getMessage());
+                    upnpStatusLbl.setText(" Error: " + ex.getMessage());
             });
         }
     }
@@ -1090,7 +1362,7 @@ class PartyPanelBuilder {
         String code = RoomCode.encode(host, port);
         Platform.runLater(() -> {
             if (masterCodeLbl != null) masterCodeLbl.setText(code);
-            if (upnpStatusLbl != null) upnpStatusLbl.setText("✅ Túnel activo — " + label + ":" + port);
+            if (upnpStatusLbl != null) upnpStatusLbl.setText(" Túnel activo — " + label + ":" + port);
         });
     }
 
@@ -1203,11 +1475,13 @@ class PartyPanelBuilder {
     }
 
     private void showError(String msg) {
-        Label lbl = new Label("❌ " + msg);
+        Label lbl = new Label(" " + msg);
         lbl.setWrapText(true);
         lbl.getStyleClass().add("greeting-sub");
-        Button back = new Button("← Volver");
+        lbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.X_CIRCLE, BoxiconsRegular.X_CIRCLE, 14));
+        Button back = new Button("  Volver");
         back.getStyleClass().add("btn-secondary");
+        MainController.ico(back, BoxiconsRegular.ARROW_BACK, 14, false);
         back.setOnAction(e -> showLanding());
         root.getChildren().setAll(lbl, back);
     }

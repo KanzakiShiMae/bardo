@@ -25,7 +25,7 @@ class PartyServer {
         void onListenerDisconnect(String name);
         void onListenerVideoStatus(String name, String videoId, ListenerStatus status);
         void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle);
-        void onReaction(String name, String emoji, String color, String reaction);
+        void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle);
     }
 
     private record TrackRecord(String videoId, String title, String thumbnailUrl, boolean hidden) {}
@@ -36,6 +36,7 @@ class PartyServer {
     private final List<ClientHandler>   clients      = new CopyOnWriteArrayList<>();
     private final List<TrackRecord>     sharedTracks = new CopyOnWriteArrayList<>();
     private final Map<String, ListenerState> states  = Collections.synchronizedMap(new LinkedHashMap<>());
+    private final Set<String> bannedNames = Collections.synchronizedSet(new HashSet<>());
     private volatile boolean running;
 
     PartyServer(int port, Callbacks callbacks) throws IOException {
@@ -134,7 +135,7 @@ class PartyServer {
         JsonObject m = new JsonObject();
         m.addProperty("type", "chat");
         m.addProperty("name", "Master");
-        m.addProperty("emoji", "📡");
+        m.addProperty("emoji", "bx-broadcast");
         m.addProperty("color", "#54a0ff");
         m.addProperty("text", text);
         broadcast(gson.toJson(m));
@@ -144,6 +145,50 @@ class PartyServer {
         JsonObject m = new JsonObject();
         m.addProperty("type", "roomClosed");
         broadcast(gson.toJson(m));
+    }
+
+    void kickClient(String name) {
+        clients.stream().filter(c -> name.equals(c.name)).findFirst().ifPresent(c -> {
+            JsonObject m = new JsonObject();
+            m.addProperty("type", "kick");
+            c.send(gson.toJson(m));
+            c.close();
+        });
+    }
+
+    void banClient(String name) {
+        bannedNames.add(name);
+        clients.stream().filter(c -> name.equals(c.name)).findFirst().ifPresent(c -> {
+            JsonObject m = new JsonObject();
+            m.addProperty("type", "ban");
+            c.send(gson.toJson(m));
+            c.close();
+        });
+    }
+
+    void broadcastRemoveTrack(String videoId) {
+        sharedTracks.removeIf(t -> t.videoId().equals(videoId));
+        JsonObject m = new JsonObject();
+        m.addProperty("type", "removeTrack");
+        m.addProperty("videoId", videoId);
+        broadcast(gson.toJson(m));
+    }
+
+    void broadcastRedownload(String videoId) {
+        JsonObject del = new JsonObject();
+        del.addProperty("type", "redownload");
+        del.addProperty("videoId", videoId);
+        broadcast(gson.toJson(del));
+        // Re-send the track message so listeners start a fresh download
+        sharedTracks.stream().filter(t -> t.videoId().equals(videoId)).findFirst().ifPresent(t -> {
+            JsonObject tm = new JsonObject();
+            tm.addProperty("type", "track");
+            tm.addProperty("videoId", t.videoId());
+            tm.addProperty("title", t.title());
+            tm.addProperty("thumbnailUrl", t.thumbnailUrl());
+            tm.addProperty("hidden", t.hidden());
+            broadcast(gson.toJson(tm));
+        });
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -156,6 +201,7 @@ class PartyServer {
     void stop() {
         running = false;
         sharedTracks.clear();
+        bannedNames.clear();
         clients.forEach(ClientHandler::close);
         try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
     }
@@ -199,12 +245,17 @@ class PartyServer {
                 if (msg.has("emoji")) handler.emoji = msg.get("emoji").getAsString();
                 if (msg.has("color")) handler.color = msg.get("color").getAsString();
 
+                if (handler.name != null && bannedNames.contains(handler.name)) {
+                    reject(handler, "Has sido baneado de esta sala");
+                    return;
+                }
+
                 String incomingEmoji = handler.emoji;
                 String incomingColor = handler.color;
                 synchronized (states) {
                     for (ListenerState s : states.values()) {
                         if (s.emoji().equals(incomingEmoji)) {
-                            reject(handler, "El emoji " + incomingEmoji + " ya está en uso en esta sala");
+                            reject(handler, "El avatar " + incomingEmoji + " ya está en uso en esta sala");
                             return;
                         }
                         if (s.color().equals(incomingColor)) {
@@ -216,7 +267,7 @@ class PartyServer {
             }
 
             String name  = handler.name  != null ? handler.name  : handler.socket.getInetAddress().getHostAddress();
-            String emoji = handler.emoji != null ? handler.emoji : "🎵";
+            String emoji = handler.emoji != null ? handler.emoji : "bxs-music";
 
             if ("chat".equals(type)) {
                 String text  = msg.has("text") ? msg.get("text").getAsString() : "";
@@ -233,13 +284,16 @@ class PartyServer {
             }
 
             if ("reaction".equals(type)) {
-                String reaction = msg.get("reaction").getAsString();
+                String reaction    = msg.get("reaction").getAsString();
                 String senderColor = handler.color;
+                String svid        = msg.has("songRefVideoId") ? msg.get("songRefVideoId").getAsString() : null;
+                String stitle      = msg.has("songRefTitle")   ? msg.get("songRefTitle").getAsString()   : null;
                 JsonObject out = new JsonObject();
                 out.addProperty("type", "reaction"); out.addProperty("name", name);
                 out.addProperty("emoji", emoji); out.addProperty("color", senderColor); out.addProperty("reaction", reaction);
+                if (svid != null) { out.addProperty("songRefVideoId", svid); out.addProperty("songRefTitle", stitle != null ? stitle : ""); }
                 broadcast(gson.toJson(out));
-                Platform.runLater(() -> callbacks.onReaction(name, emoji, senderColor, reaction));
+                Platform.runLater(() -> callbacks.onReaction(name, emoji, senderColor, reaction, svid, stitle));
                 return;
             }
 
@@ -297,7 +351,7 @@ class PartyServer {
     private class ClientHandler {
         final Socket socket;
         String name;
-        String emoji = "🎵";
+        String emoji = "bxs-music";
         String color = "#a090b0";
         private PrintWriter out;
 

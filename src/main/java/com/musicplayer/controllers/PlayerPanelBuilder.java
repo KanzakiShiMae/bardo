@@ -1,5 +1,9 @@
 package com.musicplayer.controllers;
 
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
+
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -159,11 +163,14 @@ public final class PlayerPanelBuilder {
         }
 
         // ── Controls ─────────────────────────────────────────────────────────
-        Button ppShuffle = new Button("≋"); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
-        Button ppPlay    = new Button("▶");  ppPlay.getStyleClass().add("play-btn");
-        ppPlay.setStyle("-fx-min-width:64px;-fx-min-height:64px;-fx-font-size:22px;");
+        Button ppShuffle = new Button(); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
+        MainController.ico(ppShuffle, BoxiconsRegular.SHUFFLE, 18, false);
+        Button ppPlay = new Button(); ppPlay.getStyleClass().add("play-btn");
+        ppPlay.setStyle("-fx-min-width:64px;-fx-min-height:64px;");
+        MainController.ico(ppPlay, BoxiconsRegular.PLAY, 24, true);
         ppPlay.setOnAction(e -> onTogglePlay.accept(pi));
-        Button ppRepeat = new Button("↺"); ppRepeat.getStyleClass().add("control-btn");
+        Button ppRepeat = new Button(); ppRepeat.getStyleClass().add("control-btn");
+        MainController.ico(ppRepeat, BoxiconsRegular.REPEAT, 18, false);
         ppRepeat.setOnAction(e -> {
             pi.looping = !pi.looping;
             UIUtils.toggleStyleClass(ppRepeat, "control-active-2", pi.looping);
@@ -176,14 +183,17 @@ public final class PlayerPanelBuilder {
             // Party master: sin anterior/siguiente
             controls = new HBox(32, ppShuffle, ppPlay, ppRepeat);
         } else {
-            Button ppPrev = new Button("⏮"); ppPrev.getStyleClass().add("control-btn"); ppPrev.setOnAction(e -> onPrev.accept(pi));
-            Button ppNext = new Button("⏭"); ppNext.getStyleClass().add("control-btn"); ppNext.setOnAction(e -> onNext.accept(pi));
+            Button ppPrev = new Button(); ppPrev.getStyleClass().add("control-btn"); ppPrev.setOnAction(e -> onPrev.accept(pi));
+            MainController.ico(ppPrev, BoxiconsRegular.SKIP_PREVIOUS, 18, true);
+            Button ppNext = new Button(); ppNext.getStyleClass().add("control-btn"); ppNext.setOnAction(e -> onNext.accept(pi));
+            MainController.ico(ppNext, BoxiconsRegular.SKIP_NEXT, 18, true);
             controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
         }
         controls.setAlignment(Pos.CENTER);
 
         // ── Volume ───────────────────────────────────────────────────────────
-        Label volLbl = new Label("🔊"); volLbl.getStyleClass().add("time-label");
+        Label volLbl = new Label(); volLbl.getStyleClass().add("time-label");
+        volLbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.VOLUME_FULL, BoxiconsRegular.VOLUME_FULL, 16));
         Slider volSlider = new Slider(0, 100, pi.volume * 100);
         volSlider.getStyleClass().add("volume-slider"); volSlider.setPrefWidth(160);
         Label volPct = new Label((int) Math.round(pi.volume * 100) + "%");
