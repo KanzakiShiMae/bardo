@@ -573,13 +573,6 @@ public class MainController implements Initializable {
         partyPanelBuilder = new PartyPanelBuilder(this, downloadService);
         btnParty.setOnAction(e -> openTab("party", BoxiconsRegular.HEADPHONE, "Party", partyPanelBuilder.getPanel(), true, btnParty));
 
-        // ── DEBUG: abre dos ventanas de Party (master + listener) ─────────────
-        Button debugPartyBtn = new Button("DEBUG Party");
-        debugPartyBtn.setStyle("-fx-background-color:#c0392b;-fx-text-fill:white;-fx-font-size:10px;-fx-padding:2 8;-fx-background-radius:4;");
-        debugPartyBtn.setOnAction(e -> openDebugPartyTabs());
-        // debugPartyBtn.setVisible(false);
-        // debugPartyBtn.setManaged(false);
-        titleBar.getChildren().add(titleBar.getChildren().size() - 1, debugPartyBtn);
 
         libraryService.getGroups().addListener(
             (javafx.collections.ListChangeListener<LibraryGroup>) c -> refreshSidebarList()
