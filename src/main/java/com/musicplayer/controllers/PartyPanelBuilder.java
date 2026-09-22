@@ -8,7 +8,6 @@ import org.kordamp.ikonli.boxicons.BoxiconsRegular;
 import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import javafx.animation.*;
 import javafx.application.Platform;
-import javafx.stage.Popup;
 import javafx.beans.property.ReadOnlyBooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.geometry.Insets;
@@ -17,6 +16,7 @@ import javafx.scene.control.*;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.layout.*;
+import javafx.scene.shape.Line;
 import javafx.util.Duration;
 
 import java.net.*;
@@ -25,8 +25,10 @@ import java.util.prefs.Preferences;
 
 class PartyPanelBuilder {
 
-    private static final String BORE_ZIP_URL =
-        "https://github.com/ekzhang/bore/releases/download/v0.5.0/bore-v0.5.0-x86_64-pc-windows-msvc.zip";
+    private static final String BORE_LATEST_API_URL = "https://api.github.com/repos/ekzhang/bore/releases/latest";
+
+    /** Versión y URL de descarga (asset zip de Windows x86_64) de la última release de bore en GitHub. */
+    record BoreRelease(String version, String downloadUrl) {}
 
     private static final String[] COLORS = {
         "#ff6b6b", "#ff9f43", "#ffd32a", "#2ecc71",
@@ -87,6 +89,10 @@ class PartyPanelBuilder {
     private final Map<String, String>                           listenerEmojis = new LinkedHashMap<>();
     private final Map<String, String>                           listenerColors = new LinkedHashMap<>();
     private final Map<String, LinkedHashMap<String, PartyServer.ListenerStatus>> songStatus = new LinkedHashMap<>();
+    /** videoId -> (nombre del listener -> % de descarga, 0-100), solo mientras está DOWNLOADING. */
+    private final Map<String, Map<String, Integer>> songProgress = new LinkedHashMap<>();
+    /** Nombres de todos los listeners conectados, hayan elegido apariencia o no (para que el Master los vea a todos). */
+    private final LinkedHashSet<String> connectedListenerNames = new LinkedHashSet<>();
 
     // ── Estado Master (extras) ────────────────────────────────────────────────
     private VBox masterMemberListBox;
@@ -109,6 +115,14 @@ class PartyPanelBuilder {
     private String pendingRefVideoId;
     private String pendingRefTitle;
     private String currentListenerVideoId;
+    // Pantalla "elige tu apariencia" (tras conectar, antes de poder actuar como listener)
+    private Set<String> takenEmojis = new HashSet<>();
+    private Set<String> takenColors = new HashSet<>();
+    private Runnable appearanceRefresh;
+    private String pendingSelectedEmoji;
+    private String pendingSelectedColor;
+    private Label appearanceErrorLbl;
+    private Button appearanceConfirmBtn;
 
     PartyPanelBuilder(MainController mc, DownloadService downloadService) {
         this.mc = mc;
@@ -230,18 +244,25 @@ class PartyPanelBuilder {
         listenerEmojis.clear();
         listenerColors.clear();
         songStatus.clear();
+        songProgress.clear();
+        connectedListenerNames.clear();
 
         try {
             partyServer = new PartyServer(requestedPort, new PartyServer.Callbacks() {
                 @Override public void onListenerUpdate(String name, PartyServer.ListenerStatus status, String note, String emoji, String color) {
-                    listenerEmojis.put(name, emoji);
-                    listenerColors.put(name, color);
+                    connectedListenerNames.add(name);
+                    // emoji/color son null hasta que el listener confirma su apariencia:
+                    // mientras tanto no se guardan, así el Master lo renderiza solo con el nombre.
+                    if (emoji != null) listenerEmojis.put(name, emoji); else listenerEmojis.remove(name);
+                    if (color != null) listenerColors.put(name, color); else listenerColors.remove(name);
                     updateMasterMemberList();
                 }
                 @Override public void onListenerDisconnect(String name) {
+                    connectedListenerNames.remove(name);
                     listenerEmojis.remove(name);
                     listenerColors.remove(name);
                     songStatus.values().forEach(m -> m.remove(name));
+                    songProgress.values().forEach(m -> m.remove(name));
                     updateMasterMemberList();
                     refreshSongList();
                 }
@@ -249,6 +270,15 @@ class PartyPanelBuilder {
                     LinkedHashMap<String, PartyServer.ListenerStatus> statuses = songStatus.get(videoId);
                     if (statuses == null) return;
                     statuses.put(name, status);
+                    // El % solo tiene sentido mientras está descargando; se limpia al terminar/fallar.
+                    if (status != PartyServer.ListenerStatus.DOWNLOADING) {
+                        Map<String, Integer> prog = songProgress.get(videoId);
+                        if (prog != null) prog.remove(name);
+                    }
+                    refreshSongList();
+                }
+                @Override public void onListenerVideoProgress(String name, String videoId, int percent) {
+                    songProgress.computeIfAbsent(videoId, k -> new LinkedHashMap<>()).put(name, percent);
                     refreshSongList();
                 }
                 @Override public void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle) {
@@ -313,23 +343,29 @@ class PartyPanelBuilder {
     private void updateMasterMemberList() {
         if (masterMemberListBox == null) return;
         masterMemberListBox.getChildren().clear();
-        if (listenerEmojis.isEmpty()) {
+        if (connectedListenerNames.isEmpty()) {
             Label ph = new Label("Sin listeners conectados");
             ph.getStyleClass().add("greeting-sub");
             ph.setStyle("-fx-font-size: 11px; -fx-text-fill: #636e72;");
             masterMemberListBox.getChildren().add(ph);
         } else {
-            for (Map.Entry<String, String> entry : listenerEmojis.entrySet()) {
-                String memberName  = entry.getKey();
-                String memberEmoji = entry.getValue();
-                String memberColor = listenerColors.getOrDefault(memberName, "#a090b0");
+            for (String memberName : connectedListenerNames) {
+                String memberEmoji = listenerEmojis.get(memberName);
+                String memberColor = listenerColors.get(memberName);
+                boolean appearanceChosen = memberEmoji != null && memberColor != null;
 
                 Label dot = new Label("●");
-                dot.setStyle("-fx-font-size: 9px; -fx-text-fill: " + memberColor + ";");
+                dot.setStyle("-fx-font-size: 9px; -fx-text-fill: " + (appearanceChosen ? memberColor : "#636e72") + ";");
 
-                Label lbl = new Label("  " + memberName);
-                lbl.setGraphic(avatarFi(memberEmoji, 15, memberColor));
-                lbl.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: " + memberColor + ";");
+                Label lbl;
+                if (appearanceChosen) {
+                    lbl = new Label("  " + memberName);
+                    lbl.setGraphic(avatarFi(memberEmoji, 15, memberColor));
+                    lbl.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: " + memberColor + ";");
+                } else {
+                    lbl = new Label("  " + memberName + "  (eligiendo apariencia…)");
+                    lbl.setStyle("-fx-font-size: 13px; -fx-font-style: italic; -fx-text-fill: #8a7a9a;");
+                }
                 HBox.setHgrow(lbl, Priority.ALWAYS);
 
                 Button moreBtn = new Button();
@@ -514,9 +550,23 @@ class PartyPanelBuilder {
                 String color = switch (st) { case READY -> "#00b894"; case DOWNLOADING -> "#fdcb6e"; case ERROR -> "#e17055"; default -> "#636e72"; };
                 FontIcon emIco = avatarFi(em, 13, color);
                 FontIcon stIcon = new FontIcon(statusIkon); stIcon.setIconSize(11); stIcon.setIconColor(javafx.scene.paint.Color.web(color));
-                HBox chip = new HBox(2, emIco, stIcon);
-                chip.setStyle("-fx-background-color: rgba(255,255,255,0.07); -fx-background-radius: 4; -fx-padding: 1 5;");
+                HBox chip = new HBox(3, emIco, stIcon);
                 chip.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+
+                // Progreso en vivo mientras el listener está descargando esta canción.
+                if (st == PartyServer.ListenerStatus.DOWNLOADING) {
+                    Integer pct = songProgress.getOrDefault(shared.videoId, Collections.emptyMap()).get(entry.getKey());
+                    if (pct != null) {
+                        ProgressBar pb = new ProgressBar(pct / 100.0);
+                        pb.setPrefWidth(32); pb.setMinWidth(32); pb.setMaxHeight(5);
+                        pb.getStyleClass().add("now-playing-download-bar");
+                        Label pctLbl = new Label(pct + "%");
+                        pctLbl.setStyle("-fx-font-size: 9px; -fx-text-fill: " + color + ";");
+                        chip.getChildren().addAll(pb, pctLbl);
+                    }
+                }
+
+                chip.setStyle("-fx-background-color: rgba(255,255,255,0.07); -fx-background-radius: 4; -fx-padding: 1 5;");
                 statusBox.getChildren().add(chip);
             }
 
@@ -547,6 +597,7 @@ class PartyPanelBuilder {
             deleteBtn.setOnAction(e -> {
                 sharedSongs.remove(shared);
                 songStatus.remove(shared.videoId);
+                songProgress.remove(shared.videoId);
                 if (partyServer != null) partyServer.broadcastRemoveTrack(shared.videoId);
                 refreshSongList();
             });
@@ -743,6 +794,8 @@ class PartyPanelBuilder {
             masterCodeLbl = null; upnpStatusLbl = null; songListBox = null;
             masterMemberListBox = null; masterChatBox = null; masterChatScrollPane = null;
             sharedSongs.clear(); listenerEmojis.clear(); listenerColors.clear(); songStatus.clear();
+            songProgress.clear();
+            connectedListenerNames.clear();
             showLanding();
         });
 
@@ -758,17 +811,15 @@ class PartyPanelBuilder {
     private void showJoinForm() {
         Preferences prefs = Preferences.userNodeForPackage(PartyPanelBuilder.class);
         String savedNick  = prefs.get("party.nickname", "");
-        String defaultAvatarDesc = BoxiconsSolid.MUSIC.getDescription();
-        String savedEmoji = prefs.get("party.emoji", defaultAvatarDesc);
-        boolean savedValid = false;
-        for (org.kordamp.ikonli.Ikon ikon : AVATARS)
-            if (ikon.getDescription().equals(savedEmoji)) { savedValid = true; break; }
-        if (!savedValid) savedEmoji = defaultAvatarDesc;
 
         Label titleLbl = new Label("  Unirse a sala");
         titleLbl.getStyleClass().add("section-title");
         FontIcon joinTitleIcon = new FontIcon(BoxiconsRegular.LINK_ALT); joinTitleIcon.setIconSize(20); joinTitleIcon.getStyleClass().add("icon-primary");
         titleLbl.setGraphic(joinTitleIcon);
+
+        Label desc = new Label("Elegirás tu avatar y color una vez dentro de la sala.");
+        desc.setWrapText(true);
+        desc.getStyleClass().add("greeting-sub");
 
         Label nickHeader = new Label("NICKNAME");
         nickHeader.getStyleClass().add("sidebar-section-label");
@@ -778,80 +829,6 @@ class PartyPanelBuilder {
         nickFld.textProperty().addListener((obs, o, n) -> {
             if (n.length() > 20) nickFld.setText(n.substring(0, 20));
         });
-
-        Label emojiHeader = new Label("AVATAR");
-        emojiHeader.getStyleClass().add("sidebar-section-label");
-
-        String[] selectedEmoji = {savedEmoji};
-
-        Button avatarBtn = new Button();
-        avatarBtn.getStyleClass().add("btn-secondary");
-        avatarBtn.setStyle("-fx-min-width: 48px; -fx-min-height: 48px;");
-        FontIcon avatarDisplay = new FontIcon(savedEmoji);
-        avatarDisplay.setIconSize(24); avatarDisplay.getStyleClass().add("icon-primary");
-        avatarBtn.setGraphic(avatarDisplay);
-
-        Popup avatarPicker = new Popup();
-        avatarPicker.setAutoHide(true);
-        VBox pickerRoot = new VBox();
-        pickerRoot.setStyle("-fx-background-color: #1e1a2e; -fx-background-radius: 8; -fx-padding: 8; -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.6), 14, 0, 0, 4);");
-        FlowPane iconGrid = new FlowPane(4, 4);
-        iconGrid.setPrefWrapLength(240);
-        for (org.kordamp.ikonli.Ikon ikon : AVATARS) {
-            String desc = ikon.getDescription();
-            Button btn = new Button();
-            boolean sel = desc.equals(savedEmoji);
-            btn.setStyle("-fx-background-radius: 6; -fx-padding: 6; -fx-cursor: hand; -fx-background-color: " + (sel ? "rgba(162,155,254,0.3)" : "rgba(255,255,255,0.05)") + ";");
-            FontIcon fi = new FontIcon(ikon); fi.setIconSize(20);
-            btn.setGraphic(fi);
-            btn.setOnAction(ev -> {
-                selectedEmoji[0] = desc;
-                FontIcon newIco = new FontIcon(ikon); newIco.setIconSize(24); newIco.getStyleClass().add("icon-primary");
-                avatarBtn.setGraphic(newIco);
-                iconGrid.getChildren().forEach(n -> {
-                    if (n instanceof Button b && b.getGraphic() instanceof FontIcon) {
-                        boolean isThis = b == btn;
-                        b.setStyle("-fx-background-radius: 6; -fx-padding: 6; -fx-cursor: hand; -fx-background-color: " + (isThis ? "rgba(162,155,254,0.3)" : "rgba(255,255,255,0.05)") + ";");
-                    }
-                });
-                avatarPicker.hide();
-            });
-            iconGrid.getChildren().add(btn);
-        }
-        pickerRoot.getChildren().add(iconGrid);
-        avatarPicker.getContent().add(pickerRoot);
-        avatarBtn.setOnAction(e -> {
-            if (avatarPicker.isShowing()) { avatarPicker.hide(); return; }
-            javafx.geometry.Bounds b = avatarBtn.localToScreen(avatarBtn.getBoundsInLocal());
-            if (b != null) avatarPicker.show(avatarBtn.getScene().getWindow(), b.getMinX(), b.getMaxY() + 4);
-        });
-
-        Label colorHeader = new Label("COLOR");
-        colorHeader.getStyleClass().add("sidebar-section-label");
-
-        String savedColor = prefs.get("party.color", "#a29bfe");
-        String[] selectedColor = {savedColor};
-        ToggleGroup colorGroup = new ToggleGroup();
-        FlowPane colorPane = new FlowPane(6, 6);
-        for (String col : COLORS) {
-            ToggleButton swatch = new ToggleButton("");
-            swatch.setToggleGroup(colorGroup);
-            swatch.setPrefSize(26, 26); swatch.setMinSize(26, 26); swatch.setMaxSize(26, 26);
-            boolean isSelected = col.equals(savedColor);
-            swatch.setSelected(isSelected);
-            String baseStyle = "-fx-background-color: " + col + "; -fx-background-radius: 13; -fx-cursor: hand;";
-            String selStyle  = baseStyle + " -fx-border-color: white; -fx-border-radius: 13; -fx-border-width: 2;";
-            swatch.setStyle(isSelected ? selStyle : baseStyle);
-            swatch.selectedProperty().addListener((obs, o, n) -> {
-                if (n) {
-                    selectedColor[0] = col;
-                    swatch.setStyle(selStyle);
-                } else {
-                    swatch.setStyle(baseStyle);
-                }
-            });
-            colorPane.getChildren().add(swatch);
-        }
 
         Label codeHeader = new Label("CÓDIGO DE SALA");
         codeHeader.getStyleClass().add("sidebar-section-label");
@@ -877,9 +854,7 @@ class PartyPanelBuilder {
             try {
                 String[] parts = RoomCode.decode(codeField.getText());
                 prefs.put("party.nickname", nick);
-                prefs.put("party.emoji",    selectedEmoji[0]);
-                prefs.put("party.color",    selectedColor[0]);
-                connectAsListener(parts[0], Integer.parseInt(parts[1]), nick, selectedEmoji[0], selectedColor[0]);
+                connectAsListener(parts[0], Integer.parseInt(parts[1]), nick);
             } catch (IllegalArgumentException ex) {
                 errorLbl.setText(ex.getMessage());
                 errorLbl.setVisible(true); errorLbl.setManaged(true);
@@ -893,10 +868,8 @@ class PartyPanelBuilder {
         backBtn.setOnAction(e -> showLanding());
 
         VBox form = new VBox(10,
-            titleLbl,
+            titleLbl, desc,
             nickHeader, nickFld,
-            emojiHeader, avatarBtn,
-            colorHeader, colorPane,
             codeHeader, codeField,
             errorLbl, connectBtn, backBtn);
         form.setMaxWidth(400);
@@ -911,15 +884,199 @@ class PartyPanelBuilder {
         root.getChildren().setAll(formScroll);
     }
 
-    private void connectAsListener(String host, int port, String nickname, String emoji, String color) {
+    // ── Pantalla "elige tu apariencia" ──────────────────────────────────────────
+
+    private StackPane buildAvatarCell(org.kordamp.ikonli.Ikon ikon, boolean taken, boolean selected, Runnable onClick) {
+        Button btn = new Button();
+        btn.setPrefSize(40, 40); btn.setMinSize(40, 40); btn.setMaxSize(40, 40);
+        FontIcon fi = new FontIcon(ikon); fi.setIconSize(20);
+        fi.setIconColor(javafx.scene.paint.Color.web(taken ? "#6a6a7a" : "#a29bfe"));
+        btn.setGraphic(fi);
+        String bg = selected ? "rgba(162,155,254,0.35)" : "rgba(255,255,255,0.05)";
+        String border = selected ? " -fx-border-color: #a29bfe; -fx-border-radius: 8; -fx-border-width: 2;" : "";
+        btn.setStyle("-fx-background-radius: 8; -fx-cursor: hand; -fx-background-color: " + bg + ";" + border);
+        btn.setDisable(taken);
+        btn.setOpacity(taken ? 0.4 : 1.0);
+        btn.setOnAction(e -> onClick.run());
+        if (taken) btn.setTooltip(new Tooltip("Ya en uso en esta sala"));
+
+        StackPane cell = new StackPane(btn);
+        if (taken) {
+            Line strike = new Line(3, 3, 37, 37);
+            strike.setStroke(javafx.scene.paint.Color.web("#c0392b"));
+            strike.setStrokeWidth(2.5);
+            strike.setMouseTransparent(true);
+            cell.getChildren().add(strike);
+        }
+        return cell;
+    }
+
+    private StackPane buildColorCell(String color, boolean taken, boolean selected, Runnable onClick) {
+        Button swatch = new Button();
+        swatch.setPrefSize(28, 28); swatch.setMinSize(28, 28); swatch.setMaxSize(28, 28);
+        String border = selected ? " -fx-border-color: white; -fx-border-radius: 14; -fx-border-width: 2;" : "";
+        swatch.setStyle("-fx-background-color: " + color + "; -fx-background-radius: 14; -fx-cursor: hand;" + border);
+        swatch.setDisable(taken);
+        swatch.setOpacity(taken ? 0.35 : 1.0);
+        swatch.setOnAction(e -> onClick.run());
+        if (taken) swatch.setTooltip(new Tooltip("Ya en uso en esta sala"));
+
+        StackPane cell = new StackPane(swatch);
+        if (taken) {
+            Line strike = new Line(3, 3, 25, 25);
+            strike.setStroke(javafx.scene.paint.Color.web("#2d2d2d"));
+            strike.setStrokeWidth(2.5);
+            strike.setMouseTransparent(true);
+            cell.getChildren().add(strike);
+        }
+        return cell;
+    }
+
+    /**
+     * Pantalla obligatoria tras conectar y antes de poder actuar como listener (chat, reacciones…).
+     * Los avatares/colores ya elegidos por otros listeners de la sala aparecen tachados y se
+     * actualizan en vivo (vía {@code onTakenUpdate}) si otro listener confirma su elección mientras
+     * el usuario sigue en esta pantalla. No tiene botón de "volver" — hay que elegir para continuar.
+     */
+    private void showAppearanceForm() {
+        Preferences prefs = Preferences.userNodeForPackage(PartyPanelBuilder.class);
+        String defaultAvatarDesc = BoxiconsSolid.MUSIC.getDescription();
+        String savedEmoji = prefs.get("party.emoji", defaultAvatarDesc);
+        boolean savedEmojiValid = false;
+        for (org.kordamp.ikonli.Ikon ikon : AVATARS)
+            if (ikon.getDescription().equals(savedEmoji)) { savedEmojiValid = true; break; }
+        if (!savedEmojiValid) savedEmoji = defaultAvatarDesc;
+        String savedColor = prefs.get("party.color", "#a29bfe");
+
+        Label titleLbl = new Label("  Elige tu apariencia");
+        titleLbl.getStyleClass().add("section-title");
+        FontIcon titleIcon = new FontIcon(BoxiconsRegular.HEADPHONE); titleIcon.setIconSize(20); titleIcon.getStyleClass().add("icon-primary");
+        titleLbl.setGraphic(titleIcon);
+
+        Label desc = new Label("Elige un avatar y un color únicos para esta sala. Los que ya estén en uso por otros listeners aparecen tachados.");
+        desc.setWrapText(true);
+        desc.getStyleClass().add("greeting-sub");
+
+        Label emojiHeader = new Label("AVATAR");
+        emojiHeader.getStyleClass().add("sidebar-section-label");
+        FlowPane avatarGrid = new FlowPane(6, 6);
+
+        Label colorHeader = new Label("COLOR");
+        colorHeader.getStyleClass().add("sidebar-section-label");
+        FlowPane colorGrid = new FlowPane(8, 8);
+
+        String[] selectedEmoji = {null};
+        String[] selectedColor = {null};
+
+        Label errorLbl = new Label();
+        errorLbl.setWrapText(true);
+        errorLbl.getStyleClass().add("greeting-sub");
+        errorLbl.setStyle("-fx-text-fill: #c0392b;");
+        errorLbl.setManaged(false); errorLbl.setVisible(false);
+
+        Button confirmBtn = new Button("  Confirmar y entrar");
+        confirmBtn.getStyleClass().add("btn-primary");
+        confirmBtn.setMaxWidth(Double.MAX_VALUE);
+        confirmBtn.setDisable(true);
+        MainController.ico(confirmBtn, BoxiconsRegular.CHECK, 14, true);
+
+        Runnable updateConfirmState = () -> confirmBtn.setDisable(selectedEmoji[0] == null || selectedColor[0] == null);
+
+        Runnable[] rebuild = new Runnable[1];
+        rebuild[0] = () -> {
+            // Si lo que teníamos seleccionado acaba de ser tomado por otro, se deselecciona.
+            if (selectedEmoji[0] != null && takenEmojis.contains(selectedEmoji[0])) selectedEmoji[0] = null;
+            if (selectedColor[0] != null && takenColors.contains(selectedColor[0])) selectedColor[0] = null;
+
+            avatarGrid.getChildren().clear();
+            for (org.kordamp.ikonli.Ikon ikon : AVATARS) {
+                String d = ikon.getDescription();
+                boolean taken = takenEmojis.contains(d);
+                boolean sel = d.equals(selectedEmoji[0]);
+                avatarGrid.getChildren().add(buildAvatarCell(ikon, taken, sel, () -> {
+                    selectedEmoji[0] = d;
+                    rebuild[0].run();
+                    updateConfirmState.run();
+                }));
+            }
+            colorGrid.getChildren().clear();
+            for (String col : COLORS) {
+                boolean taken = takenColors.contains(col);
+                boolean sel = col.equals(selectedColor[0]);
+                colorGrid.getChildren().add(buildColorCell(col, taken, sel, () -> {
+                    selectedColor[0] = col;
+                    rebuild[0].run();
+                    updateConfirmState.run();
+                }));
+            }
+            updateConfirmState.run();
+        };
+
+        // Preselecciona lo último usado si sigue disponible.
+        if (!takenEmojis.contains(savedEmoji)) selectedEmoji[0] = savedEmoji;
+        if (!takenColors.contains(savedColor)) selectedColor[0] = savedColor;
+        rebuild[0].run();
+
+        appearanceRefresh = rebuild[0];
+
+        confirmBtn.setOnAction(e -> {
+            if (selectedEmoji[0] == null || selectedColor[0] == null || partyClient == null) return;
+            confirmBtn.setDisable(true);
+            errorLbl.setVisible(false); errorLbl.setManaged(false);
+            pendingSelectedEmoji = selectedEmoji[0];
+            pendingSelectedColor = selectedColor[0];
+            partyClient.chooseAppearance(selectedEmoji[0], selectedColor[0]);
+        });
+
+        appearanceErrorLbl = errorLbl;
+        appearanceConfirmBtn = confirmBtn;
+
+        VBox form = new VBox(12,
+            titleLbl, desc,
+            emojiHeader, avatarGrid,
+            colorHeader, colorGrid,
+            errorLbl, confirmBtn);
+        form.setMaxWidth(420);
+        form.setPadding(new Insets(4, 4, 4, 4));
+
+        ScrollPane formScroll = new ScrollPane(form);
+        formScroll.setFitToWidth(true);
+        formScroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        formScroll.getStyleClass().add("results-scroll");
+        VBox.setVgrow(formScroll, Priority.ALWAYS);
+
+        root.getChildren().setAll(formScroll);
+    }
+
+    private void connectAsListener(String host, int port, String nickname) {
         Label connecting = new Label(" Conectando…");
         connecting.getStyleClass().add("greeting-sub");
         FontIcon connectingIcon = new FontIcon(BoxiconsRegular.LINK_ALT); connectingIcon.setIconSize(14); connectingIcon.getStyleClass().add("icon-secondary");
         connecting.setGraphic(connectingIcon);
         root.getChildren().setAll(connecting);
 
-        partyClient = new PartyClient(host, port, nickname, emoji, color, downloadService, new PartyClient.Callbacks() {
-            @Override public void onConnected() { showListenerPanel(); }
+        takenEmojis = new HashSet<>();
+        takenColors = new HashSet<>();
+        appearanceRefresh = null;
+
+        partyClient = new PartyClient(host, port, nickname, downloadService, new PartyClient.Callbacks() {
+            @Override public void onConnected() { showAppearanceForm(); }
+            @Override public void onTakenUpdate(Set<String> emojis, Set<String> colors) {
+                takenEmojis = emojis;
+                takenColors = colors;
+                if (appearanceRefresh != null) appearanceRefresh.run();
+            }
+            @Override public void onAppearanceAccepted() {
+                Preferences prefs = Preferences.userNodeForPackage(PartyPanelBuilder.class);
+                if (pendingSelectedEmoji != null) prefs.put("party.emoji", pendingSelectedEmoji);
+                if (pendingSelectedColor != null) prefs.put("party.color", pendingSelectedColor);
+                appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
+                showListenerPanel();
+            }
+            @Override public void onAppearanceRejected(String reason) {
+                if (appearanceErrorLbl != null) { appearanceErrorLbl.setText(reason); appearanceErrorLbl.setVisible(true); appearanceErrorLbl.setManaged(true); }
+                if (appearanceConfirmBtn != null) appearanceConfirmBtn.setDisable(false);
+            }
             @Override public void onRejected(String reason) {
                 partyClient = null;
                 mc.showToast(reason);
@@ -995,6 +1152,7 @@ class PartyPanelBuilder {
                 if (partyClient != null) { partyClient.disconnect(); partyClient = null; }
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+                appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 mc.closeTabForced("party");
                 showLanding();
@@ -1006,6 +1164,7 @@ class PartyPanelBuilder {
                 partyClient = null;
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+                appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 mc.showToast("Has sido expulsado de la sala");
                 showJoinForm();
@@ -1017,6 +1176,7 @@ class PartyPanelBuilder {
                 partyClient = null;
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+                appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 mc.showToast("Has sido baneado de esta sala");
                 showLanding();
@@ -1038,6 +1198,7 @@ class PartyPanelBuilder {
                 partyClient = null;
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+                appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 showError("Desconectado: " + reason);
             }
@@ -1366,7 +1527,7 @@ class PartyPanelBuilder {
         });
     }
 
-    private java.nio.file.Path boreExePath() throws java.io.IOException {
+    static java.nio.file.Path boreExePath() throws java.io.IOException {
         String base = System.getenv("APPDATA");
         if (base == null) base = System.getProperty("user.home");
         java.nio.file.Path dir = java.nio.file.Path.of(base, "Bardo");
@@ -1374,18 +1535,49 @@ class PartyPanelBuilder {
         return dir.resolve("bore.exe");
     }
 
-    private void downloadBore(java.nio.file.Path dest) throws Exception {
-        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
-                new java.io.BufferedInputStream(
-                    new java.net.URI(BORE_ZIP_URL).toURL().openStream()))) {
+    /** Consulta la última release de bore en GitHub y devuelve su versión + URL del asset de Windows x86_64. */
+    static BoreRelease latestBoreRelease() throws Exception {
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection)
+            new java.net.URI(BORE_LATEST_API_URL).toURL().openConnection();
+        conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
+        conn.setConnectTimeout(10_000); conn.setReadTimeout(10_000);
+        String body;
+        try (java.io.InputStream in = conn.getInputStream()) {
+            body = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+        com.google.gson.JsonObject json = com.google.gson.JsonParser.parseString(body).getAsJsonObject();
+        String tagName = json.get("tag_name").getAsString();
+        String version = tagName.startsWith("v") ? tagName.substring(1) : tagName;
+
+        String downloadUrl = null;
+        for (com.google.gson.JsonElement el : json.getAsJsonArray("assets")) {
+            com.google.gson.JsonObject asset = el.getAsJsonObject();
+            String name = asset.get("name").getAsString();
+            if (name.endsWith("x86_64-pc-windows-msvc.zip")) { downloadUrl = asset.get("browser_download_url").getAsString(); break; }
+        }
+        if (downloadUrl == null) throw new java.io.IOException("No se encontró el asset de Windows en la última release de bore");
+        return new BoreRelease(version, downloadUrl);
+    }
+
+    /** Extrae el primer ejecutable (.exe o "bore") encontrado dentro de un zip a {@code dest}. */
+    static void extractExeFromZip(java.io.InputStream zipStream, java.nio.file.Path dest) throws java.io.IOException {
+        try (java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(zipStream)) {
             java.util.zip.ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
                 if (entry.getName().endsWith(".exe") || entry.getName().equals("bore")) {
-                    java.nio.file.Files.copy(zis, dest,
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-                    break;
+                    java.nio.file.Files.copy(zis, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    return;
                 }
             }
+        }
+        throw new java.io.IOException("No se encontró el ejecutable de bore dentro del zip descargado");
+    }
+
+    private void downloadBore(java.nio.file.Path dest) throws Exception {
+        BoreRelease latest = latestBoreRelease();
+        try (java.io.InputStream in = new java.io.BufferedInputStream(
+                new java.net.URI(latest.downloadUrl()).toURL().openStream())) {
+            extractExeFromZip(in, dest);
         }
     }
 

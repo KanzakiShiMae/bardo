@@ -144,6 +144,7 @@ public class MainController implements Initializable {
     @FXML private HBox      nowPlayingBar;
     @FXML private ImageView albumArt;
     @FXML private Label     nowPlayingTitle, nowPlayingArtist;
+    @FXML private ProgressBar nowPlayingDownloadBar;
     @FXML private Button    btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat;
     @FXML private Slider    progressSlider, volumeSlider;
     @FXML private Label     timeElapsed, timeTotal, volumeLabel;
@@ -573,6 +574,11 @@ public class MainController implements Initializable {
         partyPanelBuilder = new PartyPanelBuilder(this, downloadService);
         btnParty.setOnAction(e -> openTab("party", BoxiconsRegular.HEADPHONE, "Party", partyPanelBuilder.getPanel(), true, btnParty));
 
+        // ── DEBUG: abre dos ventanas de Party (master + listener) ─────────────
+        Button debugPartyBtn = new Button("DEBUG Party");
+        debugPartyBtn.setStyle("-fx-background-color:#c0392b;-fx-text-fill:white;-fx-font-size:10px;-fx-padding:2 8;-fx-background-radius:4;");
+        debugPartyBtn.setOnAction(e -> openDebugPartyTabs());
+        titleBar.getChildren().add(titleBar.getChildren().size() - 1, debugPartyBtn);
 
         libraryService.getGroups().addListener(
             (javafx.collections.ListChangeListener<LibraryGroup>) c -> refreshSidebarList()
@@ -917,10 +923,14 @@ public class MainController implements Initializable {
         downloadingNow.add(vid);
         nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
         nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
+        nowPlayingDownloadBar.setProgress(0);
+        nowPlayingDownloadBar.setVisible(true); nowPlayingDownloadBar.setManaged(true);
 
-        downloadService.downloadAudio(song, target.getId())
+        downloadService.downloadAudio(song, target.getId(),
+                pct -> Platform.runLater(() -> nowPlayingDownloadBar.setProgress(pct / 100.0)))
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
+                nowPlayingDownloadBar.setVisible(false); nowPlayingDownloadBar.setManaged(false);
                 song.setLocalFilePath(path.toString());
                 if (!song.hasDuration()) {
                     try {
@@ -935,6 +945,7 @@ public class MainController implements Initializable {
             .exceptionally(ex -> {
                 Platform.runLater(() -> {
                     downloadingNow.remove(vid);
+                    nowPlayingDownloadBar.setVisible(false); nowPlayingDownloadBar.setManaged(false);
                     showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
                     updateMiniPlayerVisibility();
                 });
@@ -1867,9 +1878,15 @@ public class MainController implements Initializable {
     }
 
     private void refreshYouTubePlaylist(LibraryGroup group, Button refreshBtn) {
-        String original = refreshBtn.getText(); refreshBtn.setDisable(true); refreshBtn.setText("…");
-        youTubeService.getPlaylistItems(group.getYoutubePlaylistId())
+        refreshBtn.setDisable(true);
+        DownloadDialogs.FetchProgressDialog progress = DownloadDialogs.showFetchProgress(
+            "Actualizando «" + group.getName() + "»",
+            contentArea.getScene().getWindow(),
+            getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm());
+
+        youTubeService.getPlaylistItems(group.getYoutubePlaylistId(), progress::update)
             .thenAccept(songs -> Platform.runLater(() -> {
+                progress.close();
                 // Update durations of songs already in the group
                 Map<String, Song> fetchedMap = songs.stream()
                     .collect(Collectors.toMap(Song::getVideoId, s -> s, (a, b) -> a));
@@ -1878,11 +1895,11 @@ public class MainController implements Initializable {
                     if (f != null && !s.hasDuration())
                         s.setDuration(f.getDuration());
                 });
-                // Add truly new songs at the end
+                // Add truly new songs at the beginning
                 Set<String> existing = group.getSongs().stream().map(Song::getVideoId).collect(Collectors.toSet());
                 List<Song> newSongs = songs.stream().filter(s -> !existing.contains(s.getVideoId())).collect(Collectors.toList());
-                group.getSongs().addAll(newSongs);
-                refreshBtn.setDisable(false); refreshBtn.setText(original);
+                group.getSongs().addAll(0, newSongs);
+                refreshBtn.setDisable(false);
                 int added = newSongs.size();
                 showToast(added > 0
                     ? "+" + added + " canción" + (added == 1 ? "" : "es") + " nueva" + (added == 1 ? "" : "s") + " en «" + group.getName() + "»"
@@ -1890,7 +1907,11 @@ public class MainController implements Initializable {
                 refreshLibraryPanel();
             }))
             .exceptionally(ex -> {
-                Platform.runLater(() -> { refreshBtn.setDisable(false); refreshBtn.setText(original); showToast("Error al actualizar: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage()); });
+                Platform.runLater(() -> {
+                    progress.close();
+                    refreshBtn.setDisable(false);
+                    showToast("Error al actualizar: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
+                });
                 return null;
             });
     }
@@ -2807,14 +2828,24 @@ public class MainController implements Initializable {
         });
     }
 
+    private int debugListenerCount = 0;
+
+    /**
+     * Abre las pestañas de depuración de Party. La primera pulsación abre el Master y un primer
+     * Listener; como {@link #openTab} reutiliza la pestaña si el id ya existe, el Master nunca se
+     * duplica — cada pulsación posterior añade una pestaña de Listener nueva y distinta (con id y
+     * número incremental), para poder tener varios listeners simultáneos conectados a la misma sala.
+     */
     private void openDebugPartyTabs() {
         // El master usa el partyPanelBuilder principal: así isMasterProperty() y addSongToParty()
         // funcionan correctamente y los botones 📢 de reproductores/playlists se activan.
         openTab("debug-party-master", BoxiconsRegular.BROADCAST, "DEBUG Master", partyPanelBuilder.getPanel(), true, null);
 
-        // El listener tiene su propio builder independiente
+        // El listener tiene su propio builder independiente; uno nuevo en cada pulsación.
+        debugListenerCount++;
         PartyPanelBuilder listenerBuilder = new PartyPanelBuilder(this, downloadService);
         listenerBuilder.navigateToJoin();
-        openTab("debug-party-listener", BoxiconsRegular.LINK_ALT, "DEBUG Listener", listenerBuilder.getPanel(), true, null);
+        openTab("debug-party-listener-" + debugListenerCount, BoxiconsRegular.LINK_ALT,
+            "DEBUG Listener " + debugListenerCount, listenerBuilder.getPanel(), true, null);
     }
 }

@@ -428,6 +428,21 @@
     -fx-wrap-text: false;
 }
 .np-artist { -fx-font-size: 11px; -fx-text-fill: bardo-text-muted; }
+.now-playing-download-bar {
+    -fx-pref-height: 4px;
+    -fx-background-color: derive(bardo-sidebar-bg, -5%);
+    -fx-background-radius: 3px;
+    -fx-accent: derive(bardo-accent, -15%);
+}
+.now-playing-download-bar > .track {
+    -fx-background-color: derive(bardo-sidebar-bg, -5%);
+    -fx-background-radius: 3px;
+}
+.now-playing-download-bar > .bar {
+    -fx-background-color: linear-gradient(to right, bardo-accent, derive(bardo-accent, -15%));
+    -fx-background-radius: 3px;
+    -fx-background-insets: 0;
+}
 .np-like-btn {
     -fx-background-color: transparent;
     -fx-border-width: 0;

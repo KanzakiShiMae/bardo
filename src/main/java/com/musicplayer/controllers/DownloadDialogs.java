@@ -150,6 +150,46 @@ public final class DownloadDialogs {
         }));
     }
 
+    // ── Progreso de fetch (actualizar playlist) ─────────────────────────────────
+
+    /** Handle para actualizar/cerrar un diálogo de progreso abierto con {@link #showFetchProgress}. */
+    public static final class FetchProgressDialog {
+        private final Stage stage;
+        private final ProgressBar bar;
+        private final Label countLbl;
+
+        private FetchProgressDialog(Stage stage, ProgressBar bar, Label countLbl) {
+            this.stage = stage; this.bar = bar; this.countLbl = countLbl;
+        }
+
+        /** Actualiza la barra con {@code fetched}/{@code total} canciones obtenidas hasta ahora. */
+        public void update(int fetched, int total) {
+            Platform.runLater(() -> {
+                bar.setProgress(total > 0 ? (double) fetched / total : ProgressBar.INDETERMINATE_PROGRESS);
+                countLbl.setText(fetched + (total > 0 ? " / " + total : "") + " canciones");
+            });
+        }
+
+        public void close() { Platform.runLater(stage::close); }
+    }
+
+    /** Abre un diálogo modal no bloqueante con una barra de progreso indeterminada hasta la primera actualización. */
+    public static FetchProgressDialog showFetchProgress(String title, Window owner, String cssPath) {
+        Stage stage = makeStage(owner);
+
+        Label titleLbl = label(title, "-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #5a4a6a;");
+        FontIcon titleIcon = new FontIcon(BoxiconsRegular.REFRESH); titleIcon.setIconSize(16); titleIcon.setIconColor(Color.web("#5a4a6a"));
+        titleLbl.setGraphic(titleIcon);
+
+        ProgressBar fetchBar = bar(); fetchBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+        Label countLbl = label("Conectando…", "-fx-font-size: 12px; -fx-text-fill: #5a4a6a;");
+
+        show(stage, root(360, titleLbl, fetchBar, countLbl), cssPath);
+        centerOver(stage, owner);
+
+        return new FetchProgressDialog(stage, fetchBar, countLbl);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static Stage makeStage(Window owner) {

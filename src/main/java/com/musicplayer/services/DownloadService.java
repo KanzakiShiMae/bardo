@@ -4,7 +4,12 @@ import com.musicplayer.models.Song;
 
 import java.io.*;
 import java.nio.file.*;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.IntConsumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Gestiona la descarga de audio desde YouTube usando el binario yt-dlp.
@@ -20,6 +25,8 @@ import java.util.concurrent.CompletableFuture;
 public class DownloadService {
 
     private static final Path BIN_DIR = PersistenceService.bardoBaseDir().resolve("bin");
+    /** yt-dlp imprime líneas como "[download]  42.0% of 4.23MiB at ..." — separadas por \r, no \n. */
+    private static final Pattern PROGRESS_PATTERN = Pattern.compile("\\[download]\\s+([\\d.]+)%");
 
     private Path getAudioBaseDir() {
         String saved = LibraryService.getInstance().loadAudioDir();
@@ -34,7 +41,7 @@ public class DownloadService {
      * Devuelve la ruta al ejecutable yt-dlp listo para usar.
      * Si no está extraído aún, lo copia desde los recursos del JAR.
      */
-    private String getYtDlpPath() throws IOException {
+    public String getYtDlpPath() throws IOException {
         Path exe = BIN_DIR.resolve("yt-dlp.exe");
         if (!Files.exists(exe)) {
             Files.createDirectories(BIN_DIR);
@@ -63,6 +70,16 @@ public class DownloadService {
      * Si el archivo ya existe devuelve su ruta sin volver a descargarlo.
      */
     public CompletableFuture<Path> downloadAudio(Song song, String groupId) {
+        return downloadAudio(song, groupId, null);
+    }
+
+    /**
+     * Igual que {@link #downloadAudio(Song, String)}, pero invoca {@code onProgress} (0-100)
+     * cada vez que yt-dlp reporta un nuevo porcentaje de descarga. Se invoca desde el hilo de
+     * background de la descarga — el llamador debe envolver cualquier actualización de UI en
+     * {@code Platform.runLater}. No se llama si el archivo ya estaba descargado.
+     */
+    public CompletableFuture<Path> downloadAudio(Song song, String groupId, IntConsumer onProgress) {
         return CompletableFuture.supplyAsync(() -> {
             Path dir = getGroupDir(groupId);
 
@@ -97,11 +114,27 @@ public class DownloadService {
 
             try {
                 Process proc = pb.start();
-                proc.getInputStream().transferTo(System.out);
+                List<String> outputLines = new ArrayList<>();
+                try (BufferedReader r = new BufferedReader(
+                        new InputStreamReader(proc.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = r.readLine()) != null) {
+                        System.out.println(line);
+                        outputLines.add(line);
+                        if (onProgress != null) {
+                            Matcher m = PROGRESS_PATTERN.matcher(line);
+                            if (m.find()) {
+                                try { onProgress.accept((int) Double.parseDouble(m.group(1))); }
+                                catch (NumberFormatException ignored) {}
+                            }
+                        }
+                    }
+                }
                 int code = proc.waitFor();
                 if (code != 0)
                     throw new RuntimeException(
-                        "yt-dlp terminó con código " + code + " para " + song.getVideoId());
+                        "yt-dlp terminó con código " + code + " para " + song.getVideoId()
+                            + ": " + extractYtDlpError(outputLines));
             } catch (IOException e) {
                 throw new RuntimeException("Error al iniciar la descarga: " + e.getMessage(), e);
             } catch (InterruptedException e) {
@@ -117,6 +150,23 @@ public class DownloadService {
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * Extrae la línea más útil de la salida (stdout+stderr combinados) de yt-dlp
+     * para diagnosticar un fallo: prefiere la última línea "ERROR: ..." y, si no
+     * hay ninguna, cae a la última línea no vacía de la salida.
+     */
+    private static String extractYtDlpError(List<String> lines) {
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            String l = lines.get(i);
+            if (l.startsWith("ERROR:")) return l;
+        }
+        for (int i = lines.size() - 1; i >= 0; i--) {
+            String l = lines.get(i).trim();
+            if (!l.isEmpty()) return l;
+        }
+        return "(sin salida de yt-dlp)";
+    }
 
     /** Busca un archivo cuyo nombre empiece por videoId+"." en el directorio dado. */
     private Path findDownloaded(Path dir, String videoId) {

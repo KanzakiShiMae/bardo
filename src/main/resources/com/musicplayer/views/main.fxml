@@ -153,6 +153,9 @@
                            styleClass="np-title"  maxWidth="150" />
                     <Label fx:id="nowPlayingArtist" text="–"
                            styleClass="np-artist" />
+                    <ProgressBar fx:id="nowPlayingDownloadBar" progress="0"
+                                 styleClass="now-playing-download-bar"
+                                 maxWidth="150" visible="false" managed="false" />
                 </VBox>
                 <Button fx:id="btnOpenBrowser" text="🔗" styleClass="np-like-btn" onAction="#onOpenInBrowser" />
             </HBox>

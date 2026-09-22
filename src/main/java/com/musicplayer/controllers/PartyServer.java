@@ -1,6 +1,7 @@
 package com.musicplayer.controllers;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import javafx.application.Platform;
 
@@ -24,6 +25,8 @@ class PartyServer {
         void onListenerUpdate(String name, ListenerStatus status, String note, String emoji, String color);
         void onListenerDisconnect(String name);
         void onListenerVideoStatus(String name, String videoId, ListenerStatus status);
+        /** Porcentaje (0-100) de descarga de {@code videoId} reportado por el listener {@code name}. */
+        void onListenerVideoProgress(String name, String videoId, int percent);
         void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle);
         void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle);
     }
@@ -223,8 +226,12 @@ class PartyServer {
         synchronized (states) { snapshot = new ArrayList<>(states.values()); }
         JsonObject m = new JsonObject();
         m.addProperty("type", "members");
-        com.google.gson.JsonArray arr = new com.google.gson.JsonArray();
+        JsonArray arr = new JsonArray();
         for (ListenerState s : snapshot) {
+            // Los listeners que aún no han elegido avatar/color no se incluyen en la
+            // lista que ven los demás listeners — solo el Master los ve (por nombre,
+            // vía onListenerUpdate/onListenerUpdate con emoji/color null).
+            if (s.emoji() == null || s.color() == null) continue;
             JsonObject member = new JsonObject();
             member.addProperty("name", s.name());
             member.addProperty("emoji", s.emoji());
@@ -235,39 +242,49 @@ class PartyServer {
         broadcast(gson.toJson(m));
     }
 
+    /** Construye el mensaje "taken" con los avatares/colores ya elegidos por listeners confirmados. */
+    private JsonObject buildTakenMessage() {
+        Set<String> emojis = new LinkedHashSet<>();
+        Set<String> colors = new LinkedHashSet<>();
+        synchronized (states) {
+            for (ListenerState s : states.values()) {
+                if (s.emoji() != null) emojis.add(s.emoji());
+                if (s.color() != null) colors.add(s.color());
+            }
+        }
+        JsonObject m = new JsonObject();
+        m.addProperty("type", "taken");
+        JsonArray emojiArr = new JsonArray(); emojis.forEach(emojiArr::add);
+        JsonArray colorArr = new JsonArray(); colors.forEach(colorArr::add);
+        m.add("emojis", emojiArr);
+        m.add("colors", colorArr);
+        return m;
+    }
+
+    /** Notifica a todos los clientes qué avatares/colores están ocupados — para que los que
+     *  aún están eligiendo apariencia vean tachado en tiempo real lo que otro acaba de confirmar. */
+    private void broadcastTaken() { broadcast(gson.toJson(buildTakenMessage())); }
+
     private void onMessage(ClientHandler handler, String json) {
         try {
             JsonObject msg = gson.fromJson(json, JsonObject.class);
             String type = msg.get("type").getAsString();
 
             if ("hello".equals(type)) {
-                if (msg.has("name"))  handler.name  = msg.get("name").getAsString();
-                if (msg.has("emoji")) handler.emoji = msg.get("emoji").getAsString();
-                if (msg.has("color")) handler.color = msg.get("color").getAsString();
+                if (msg.has("name")) handler.name = msg.get("name").getAsString();
 
                 if (handler.name != null && bannedNames.contains(handler.name)) {
                     reject(handler, "Has sido baneado de esta sala");
                     return;
                 }
-
-                String incomingEmoji = handler.emoji;
-                String incomingColor = handler.color;
-                synchronized (states) {
-                    for (ListenerState s : states.values()) {
-                        if (s.emoji().equals(incomingEmoji)) {
-                            reject(handler, "El avatar " + incomingEmoji + " ya está en uso en esta sala");
-                            return;
-                        }
-                        if (s.color().equals(incomingColor)) {
-                            reject(handler, "El color elegido ya está en uso en esta sala");
-                            return;
-                        }
-                    }
-                }
+                // El avatar/color se eligen en un paso posterior (chooseAppearance),
+                // una vez el listener ya está dentro de la sala — no se validan aquí.
             }
 
-            String name  = handler.name  != null ? handler.name  : handler.socket.getInetAddress().getHostAddress();
-            String emoji = handler.emoji != null ? handler.emoji : "bxs-music";
+            String name = handler.name != null ? handler.name : handler.socket.getInetAddress().getHostAddress();
+            // Fallback solo para mostrar chat/reacciones si llegaran sin apariencia elegida
+            // (no debería ocurrir: el cliente bloquea esas acciones hasta confirmar apariencia).
+            String displayEmoji = handler.emoji != null ? handler.emoji : "bxs-music";
 
             if ("chat".equals(type)) {
                 String text  = msg.has("text") ? msg.get("text").getAsString() : "";
@@ -275,11 +292,11 @@ class PartyServer {
                 String stitle = msg.has("songRefTitle")  ? msg.get("songRefTitle").getAsString()  : null;
                 String senderColor = handler.color;
                 JsonObject out = new JsonObject();
-                out.addProperty("type", "chat"); out.addProperty("name", name); out.addProperty("emoji", emoji);
+                out.addProperty("type", "chat"); out.addProperty("name", name); out.addProperty("emoji", displayEmoji);
                 out.addProperty("color", senderColor); out.addProperty("text", text);
                 if (svid != null) { out.addProperty("songRefVideoId", svid); out.addProperty("songRefTitle", stitle != null ? stitle : ""); }
                 broadcast(gson.toJson(out));
-                Platform.runLater(() -> callbacks.onChatMessage(name, emoji, senderColor, text, svid, stitle));
+                Platform.runLater(() -> callbacks.onChatMessage(name, displayEmoji, senderColor, text, svid, stitle));
                 return;
             }
 
@@ -290,10 +307,58 @@ class PartyServer {
                 String stitle      = msg.has("songRefTitle")   ? msg.get("songRefTitle").getAsString()   : null;
                 JsonObject out = new JsonObject();
                 out.addProperty("type", "reaction"); out.addProperty("name", name);
-                out.addProperty("emoji", emoji); out.addProperty("color", senderColor); out.addProperty("reaction", reaction);
+                out.addProperty("emoji", displayEmoji); out.addProperty("color", senderColor); out.addProperty("reaction", reaction);
                 if (svid != null) { out.addProperty("songRefVideoId", svid); out.addProperty("songRefTitle", stitle != null ? stitle : ""); }
                 broadcast(gson.toJson(out));
-                Platform.runLater(() -> callbacks.onReaction(name, emoji, senderColor, reaction, svid, stitle));
+                Platform.runLater(() -> callbacks.onReaction(name, displayEmoji, senderColor, reaction, svid, stitle));
+                return;
+            }
+
+            if ("chooseAppearance".equals(type)) {
+                if (handler.name == null || !msg.has("emoji") || !msg.has("color")) return;
+                String wantEmoji = msg.get("emoji").getAsString();
+                String wantColor = msg.get("color").getAsString();
+
+                boolean conflict;
+                synchronized (states) {
+                    conflict = states.values().stream().anyMatch(s ->
+                        !s.name().equals(handler.name) &&
+                        (wantEmoji.equals(s.emoji()) || wantColor.equals(s.color())));
+                    if (!conflict) {
+                        handler.emoji = wantEmoji;
+                        handler.color = wantColor;
+                        ListenerState prev = states.get(handler.name);
+                        ListenerStatus st = prev != null ? prev.status() : ListenerStatus.CONNECTING;
+                        String nt = prev != null ? prev.note() : "";
+                        states.put(handler.name, new ListenerState(handler.name, st, nt, wantEmoji, wantColor));
+                    }
+                }
+
+                if (conflict) {
+                    JsonObject rej = new JsonObject();
+                    rej.addProperty("type", "appearanceRejected");
+                    rej.addProperty("reason", "Ese avatar o color ya no está disponible — elige otro");
+                    handler.send(gson.toJson(rej));
+                    // Puede que su copia de "taken" estuviera desactualizada; se la reenviamos.
+                    handler.send(gson.toJson(buildTakenMessage()));
+                } else {
+                    JsonObject acc = new JsonObject();
+                    acc.addProperty("type", "appearanceAccepted");
+                    handler.send(gson.toJson(acc));
+                    String finalName = handler.name;
+                    Platform.runLater(() -> callbacks.onListenerUpdate(finalName, ListenerStatus.CONNECTING, "", wantEmoji, wantColor));
+                    broadcastMembers();
+                    broadcastTaken();
+                }
+                return;
+            }
+
+            if ("progress".equals(type)) {
+                if (handler.name == null || !msg.has("videoId") || !msg.has("percent")) return;
+                String pvid = msg.get("videoId").getAsString();
+                int percent = msg.get("percent").getAsInt();
+                String pname = handler.name;
+                Platform.runLater(() -> callbacks.onListenerVideoProgress(pname, pvid, percent));
                 return;
             }
 
@@ -307,12 +372,14 @@ class PartyServer {
             if (status == null) return;
 
             String note = msg.has("message") ? msg.get("message").getAsString() : "";
-            states.put(name, new ListenerState(name, status, note, emoji, handler.color));
-            Platform.runLater(() -> callbacks.onListenerUpdate(name, status, note, emoji, handler.color));
+            // handler.emoji/color (no el fallback) para que "no elegido aún" siga siendo null.
+            states.put(name, new ListenerState(name, status, note, handler.emoji, handler.color));
+            Platform.runLater(() -> callbacks.onListenerUpdate(name, status, note, handler.emoji, handler.color));
             if ("hello".equals(type)) {
                 JsonObject welcome = new JsonObject();
                 welcome.addProperty("type", "welcome");
                 handler.send(gson.toJson(welcome));
+                handler.send(gson.toJson(buildTakenMessage()));
                 for (TrackRecord t : sharedTracks) {
                     JsonObject tm = new JsonObject();
                     tm.addProperty("type", "track");
@@ -344,6 +411,7 @@ class PartyServer {
         if (name != null) {
             states.remove(name);
             broadcastMembers();
+            broadcastTaken(); // libera su avatar/color para quien siga eligiendo apariencia
             Platform.runLater(() -> callbacks.onListenerDisconnect(name));
         }
     }
@@ -351,8 +419,8 @@ class PartyServer {
     private class ClientHandler {
         final Socket socket;
         String name;
-        String emoji = "bxs-music";
-        String color = "#a090b0";
+        String emoji; // null hasta que el listener confirma su apariencia (chooseAppearance)
+        String color; // null hasta que el listener confirma su apariencia (chooseAppearance)
         private PrintWriter out;
 
         ClientHandler(Socket socket) { this.socket = socket; }

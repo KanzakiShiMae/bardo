@@ -2,6 +2,7 @@ package com.musicplayer;
 
 import com.musicplayer.controllers.UpdateChecker;
 import com.musicplayer.services.ConfigLoader;
+import com.musicplayer.services.DownloadService;
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
@@ -80,6 +81,8 @@ public class App extends Application {
         stage.show();
 
         UpdateChecker.checkAsync(v, stage);
+        UpdateChecker.checkYtDlpAsync(stage, new DownloadService());
+        UpdateChecker.checkBoreAsync(stage);
     }
 
     public static void main(String[] args) {

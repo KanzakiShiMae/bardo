@@ -21,6 +21,9 @@ class PartyClient {
 
     interface Callbacks {
         void onConnected();
+        void onTakenUpdate(java.util.Set<String> emojis, java.util.Set<String> colors);
+        void onAppearanceAccepted();
+        void onAppearanceRejected(String reason);
         void onTrackLoading(String title);
         void onTrackAnnounced(String videoId, String title, boolean hidden);
         void onTrackReady(Song song, Path localPath);
@@ -46,22 +49,22 @@ class PartyClient {
     private final String host;
     private final int port;
     private final String listenerName;
-    private final String emoji;
-    private final String color;
     private final DownloadService downloadService;
     private final Callbacks callbacks;
     private final Gson gson = new Gson();
 
+    /** Avatar/color elegidos vía {@link #chooseAppearance}; null hasta entonces. */
+    private String emoji;
+    private String color;
+
     private Socket socket;
     private PrintWriter out;
     private volatile boolean running;
-    PartyClient(String host, int port, String listenerName, String emoji, String color,
+    PartyClient(String host, int port, String listenerName,
                 DownloadService downloadService, Callbacks callbacks) {
         this.host = host;
         this.port = port;
         this.listenerName = listenerName;
-        this.emoji = emoji;
-        this.color = color;
         this.downloadService = downloadService;
         this.callbacks = callbacks;
     }
@@ -75,7 +78,7 @@ class PartyClient {
                 running = true;
                 out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8), true);
 
-                send("hello", j -> { j.addProperty("name", listenerName); j.addProperty("emoji", emoji); j.addProperty("color", color); });
+                send("hello", j -> j.addProperty("name", listenerName));
                 everConnected = true;
 
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
@@ -101,6 +104,14 @@ class PartyClient {
     void disconnect() {
         running = false;
         close();
+    }
+
+    /** Confirma avatar/color elegidos tras conectar. El servidor responde con
+     *  appearanceAccepted (éxito) o appearanceRejected (otro listener lo tomó primero). */
+    void chooseAppearance(String emoji, String color) {
+        this.emoji = emoji;
+        this.color = color;
+        send("chooseAppearance", j -> { j.addProperty("emoji", emoji); j.addProperty("color", color); });
     }
 
     void sendChat(String text, String songRefVideoId, String songRefTitle) {
@@ -130,6 +141,15 @@ class PartyClient {
             switch (msg.get("type").getAsString()) {
                 case "welcome" -> Platform.runLater(callbacks::onConnected);
                 case "reject"  -> { running = false; String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onRejected(r)); }
+                case "taken" -> {
+                    java.util.Set<String> emojis = new java.util.LinkedHashSet<>();
+                    for (com.google.gson.JsonElement el : msg.getAsJsonArray("emojis")) emojis.add(el.getAsString());
+                    java.util.Set<String> colors = new java.util.LinkedHashSet<>();
+                    for (com.google.gson.JsonElement el : msg.getAsJsonArray("colors")) colors.add(el.getAsString());
+                    Platform.runLater(() -> callbacks.onTakenUpdate(emojis, colors));
+                }
+                case "appearanceAccepted" -> Platform.runLater(callbacks::onAppearanceAccepted);
+                case "appearanceRejected" -> { String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onAppearanceRejected(r)); }
                 case "track"  -> handleTrack(msg);
                 case "open"   -> { String vid = msg.get("videoId").getAsString(); boolean hid = msg.has("hidden") && msg.get("hidden").getAsBoolean(); Platform.runLater(() -> callbacks.onOpen(vid, hid)); }
                 case "play"   -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onPlay(vid, p)); }
@@ -184,7 +204,16 @@ class PartyClient {
         send("downloading", j -> j.addProperty("videoId", videoId));
 
         Song song = new Song(videoId, title, "", "—", thumbnailUrl, "");
-        downloadService.downloadAudio(song, "party")
+        // Reporta el % de descarga al Master (para que vea el progreso de sus listeners),
+        // sin exponerlo en la UI de este propio listener. Se limita el envío a cambios de
+        // al menos 2 puntos para no saturar el socket con las decenas de ticks de yt-dlp.
+        int[] lastSentPercent = {-1};
+        downloadService.downloadAudio(song, "party", pct -> {
+            if (pct - lastSentPercent[0] >= 2) {
+                lastSentPercent[0] = pct;
+                send("progress", j -> { j.addProperty("videoId", videoId); j.addProperty("percent", pct); });
+            }
+        })
             .thenAccept(path -> {
                 song.setLocalFilePath(path.toString());
                 send("ready", j -> j.addProperty("videoId", videoId));

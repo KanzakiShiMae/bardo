@@ -3,6 +3,7 @@ package com.musicplayer.controllers;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.musicplayer.services.DownloadService;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.control.*;
@@ -33,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 public class UpdateChecker {
 
     private static final String API_URL = "https://api.github.com/repos/KanzakiShiMae/bardo/releases/latest";
+    private static final String YTDLP_API_URL = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
     private static final OkHttpClient HTTP = new OkHttpClient.Builder()
             .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
@@ -74,6 +76,288 @@ public class UpdateChecker {
                 }
             } catch (Exception ignored) {
                 // La comprobación de actualizaciones es best-effort; fallar silenciosamente
+            }
+        });
+    }
+
+    // ── yt-dlp ─────────────────────────────────────────────────────────────────
+
+    /**
+     * Comprueba si hay una versión más reciente de yt-dlp en GitHub Releases y,
+     * si la hay, ofrece descargarla y reemplazar el binario local.
+     * A diferencia de {@link #checkAsync}, no requiere reiniciar la app: yt-dlp
+     * es un binario externo que se invoca como subproceso en cada descarga.
+     */
+    public static void checkYtDlpAsync(Stage ownerStage, DownloadService downloadService) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                String exePath = downloadService.getYtDlpPath();
+                String localVersion = runYtDlpVersion(exePath);
+                if (localVersion == null || localVersion.isBlank()) return;
+
+                Request req = new Request.Builder()
+                        .url(YTDLP_API_URL)
+                        .header("Accept", "application/vnd.github.v3+json")
+                        .build();
+                try (Response resp = HTTP.newCall(req).execute()) {
+                    if (!resp.isSuccessful() || resp.body() == null) return;
+                    JsonObject json = JsonParser.parseString(resp.body().string()).getAsJsonObject();
+
+                    String remoteVersion = json.get("tag_name").getAsString();
+                    if (remoteVersion.equals(localVersion)) return;
+
+                    JsonArray assets = json.getAsJsonArray("assets");
+                    String downloadUrl = null;
+                    for (var el : assets) {
+                        JsonObject asset = el.getAsJsonObject();
+                        if ("yt-dlp.exe".equals(asset.get("name").getAsString())) {
+                            downloadUrl = asset.get("browser_download_url").getAsString();
+                            break;
+                        }
+                    }
+                    if (downloadUrl == null) return;
+
+                    final String finalUrl = downloadUrl;
+                    Platform.runLater(() -> showYtDlpUpdateDialog(localVersion, remoteVersion, finalUrl, exePath, ownerStage));
+                }
+            } catch (Exception ignored) {
+                // Best-effort: si yt-dlp no responde a --version o no hay red, no molestamos al usuario
+            }
+        });
+    }
+
+    /** Ejecuta {@code yt-dlp --version} y devuelve la primera línea de salida, o null si falla. */
+    private static String runYtDlpVersion(String exePath) {
+        try {
+            Process proc = new ProcessBuilder(exePath, "--version").start();
+            String line;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                line = r.readLine();
+            }
+            proc.waitFor();
+            return line != null ? line.trim() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void showYtDlpUpdateDialog(String localVersion, String remoteVersion, String downloadUrl, String exePath, Stage ownerStage) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.initOwner(ownerStage);
+        alert.setTitle("Actualización de yt-dlp disponible");
+        alert.setHeaderText("Nueva versión de yt-dlp: " + remoteVersion);
+        alert.setContentText(
+                "Tu versión de yt-dlp (" + localVersion + ") está desactualizada.\n" +
+                "YouTube cambia con frecuencia y las versiones antiguas dejan de poder descargar audio " +
+                "(errores como \"HTTP 403\" o \"yt-dlp terminó con código 1\").\n\n" +
+                "¿Deseas descargar e instalar la versión " + remoteVersion + " ahora?");
+
+        ButtonType updateBtn = new ButtonType("Actualizar ahora", ButtonBar.ButtonData.OK_DONE);
+        ButtonType laterBtn  = new ButtonType("Ahora no",         ButtonBar.ButtonData.CANCEL_CLOSE);
+        alert.getButtonTypes().setAll(updateBtn, laterBtn);
+
+        alert.showAndWait().ifPresent(btn -> {
+            if (btn == updateBtn) downloadYtDlpAndReplace(downloadUrl, exePath, remoteVersion, ownerStage);
+        });
+    }
+
+    private static void downloadYtDlpAndReplace(String downloadUrl, String exePath, String remoteVersion, Stage ownerStage) {
+        Dialog<Void> progressDlg = new Dialog<>();
+        progressDlg.initOwner(ownerStage);
+        progressDlg.setTitle("Actualizando yt-dlp");
+        progressDlg.setHeaderText("Descargando yt-dlp " + remoteVersion + "...");
+
+        ProgressBar bar = new ProgressBar(0);
+        bar.setPrefWidth(340);
+        Label info = new Label("Preparando descarga…");
+        VBox content = new VBox(8, bar, info);
+        content.setPadding(new Insets(4, 0, 4, 0));
+        progressDlg.getDialogPane().setContent(content);
+
+        progressDlg.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        Button cancelNode = (Button) progressDlg.getDialogPane().lookupButton(ButtonType.CANCEL);
+        if (cancelNode != null) cancelNode.setVisible(false);
+
+        progressDlg.show();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                Path exeFile = Paths.get(exePath);
+                Path tmpFile = exeFile.resolveSibling("yt-dlp.exe.new");
+
+                Request req = new Request.Builder().url(downloadUrl).build();
+                try (Response resp = HTTP.newCall(req).execute()) {
+                    if (!resp.isSuccessful() || resp.body() == null)
+                        throw new IOException("HTTP " + resp.code());
+                    long total = resp.body().contentLength();
+                    try (InputStream in  = resp.body().byteStream();
+                         OutputStream out = Files.newOutputStream(tmpFile)) {
+                        byte[] buf = new byte[16_384];
+                        long downloaded = 0;
+                        int n;
+                        while ((n = in.read(buf)) != -1) {
+                            out.write(buf, 0, n);
+                            downloaded += n;
+                            final long dl = downloaded, tot = total;
+                            Platform.runLater(() -> {
+                                if (tot > 0) bar.setProgress((double) dl / tot);
+                                info.setText(formatBytes(dl) + (tot > 0 ? " / " + formatBytes(tot) : ""));
+                            });
+                        }
+                    }
+                }
+
+                Files.move(tmpFile, exeFile, StandardCopyOption.REPLACE_EXISTING);
+
+                Platform.runLater(() -> {
+                    closeDialog(progressDlg);
+                    Alert done = new Alert(Alert.AlertType.INFORMATION);
+                    done.initOwner(ownerStage);
+                    done.setTitle("yt-dlp actualizado");
+                    done.setHeaderText(null);
+                    done.setContentText("yt-dlp se actualizó correctamente a la versión " + remoteVersion + ".");
+                    done.show();
+                });
+
+            } catch (Exception ex) {
+                Platform.runLater(() -> {
+                    closeDialog(progressDlg);
+                    showError(ownerStage, "Error al actualizar yt-dlp: " + ex.getMessage());
+                });
+            }
+        });
+    }
+
+    // ── bore (túnel de Party) ────────────────────────────────────────────────────
+
+    /**
+     * Comprueba si hay una versión más reciente de bore (usado como túnel de acceso
+     * remoto opcional en Party) y ofrece actualizarla. A diferencia de yt-dlp, bore no
+     * viene bundleado: solo se descarga la primera vez que el usuario elige el modo de
+     * túnel "bore" en Party. Por eso esta comprobación no hace nada si el binario local
+     * no existe todavía — no tiene sentido descargarlo solo para comprobar su versión.
+     */
+    public static void checkBoreAsync(Stage ownerStage) {
+        CompletableFuture.runAsync(() -> {
+            try {
+                Path exeFile = PartyPanelBuilder.boreExePath();
+                if (!Files.exists(exeFile)) return;
+
+                String localVersion = runBoreVersion(exeFile.toString());
+                if (localVersion == null) return;
+
+                PartyPanelBuilder.BoreRelease latest = PartyPanelBuilder.latestBoreRelease();
+                if (latest.version().equals(localVersion)) return;
+
+                Platform.runLater(() -> showBoreUpdateDialog(localVersion, latest.version(), latest.downloadUrl(), exeFile, ownerStage));
+            } catch (Exception ignored) {
+                // Best-effort, igual que checkAsync y checkYtDlpAsync
+            }
+        });
+    }
+
+    private static String runBoreVersion(String exePath) {
+        try {
+            Process proc = new ProcessBuilder(exePath, "--version").start();
+            String line;
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(proc.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                line = r.readLine();
+            }
+            proc.waitFor();
+            if (line == null) return null;
+            // Salida esperada: "bore-cli 0.5.0" — nos quedamos con el último token
+            String[] parts = line.trim().split("\\s+");
+            return parts.length > 0 ? parts[parts.length - 1] : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void showBoreUpdateDialog(String localVersion, String remoteVersion, String downloadUrl, Path exeFile, Stage ownerStage) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.initOwner(ownerStage);
+        alert.setTitle("Actualización de bore disponible");
+        alert.setHeaderText("Nueva versión de bore: " + remoteVersion);
+        alert.setContentText(
+                "Tu versión de bore (" + localVersion + "), usada como túnel de acceso remoto en Party, está desactualizada.\n\n" +
+                "¿Deseas descargar e instalar la versión " + remoteVersion + " ahora?");
+
+        ButtonType updateBtn = new ButtonType("Actualizar ahora", ButtonBar.ButtonData.OK_DONE);
+        ButtonType laterBtn  = new ButtonType("Ahora no",         ButtonBar.ButtonData.CANCEL_CLOSE);
+        alert.getButtonTypes().setAll(updateBtn, laterBtn);
+
+        alert.showAndWait().ifPresent(btn -> {
+            if (btn == updateBtn) downloadBoreAndReplace(downloadUrl, exeFile, remoteVersion, ownerStage);
+        });
+    }
+
+    private static void downloadBoreAndReplace(String downloadUrl, Path exeFile, String remoteVersion, Stage ownerStage) {
+        Dialog<Void> progressDlg = new Dialog<>();
+        progressDlg.initOwner(ownerStage);
+        progressDlg.setTitle("Actualizando bore");
+        progressDlg.setHeaderText("Descargando bore " + remoteVersion + "...");
+
+        ProgressBar bar = new ProgressBar(0);
+        bar.setPrefWidth(340);
+        Label info = new Label("Preparando descarga…");
+        VBox content = new VBox(8, bar, info);
+        content.setPadding(new Insets(4, 0, 4, 0));
+        progressDlg.getDialogPane().setContent(content);
+
+        progressDlg.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        Button cancelNode = (Button) progressDlg.getDialogPane().lookupButton(ButtonType.CANCEL);
+        if (cancelNode != null) cancelNode.setVisible(false);
+
+        progressDlg.show();
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                Path tmpZip = exeFile.resolveSibling("bore-update.zip");
+
+                Request req = new Request.Builder().url(downloadUrl).build();
+                try (Response resp = HTTP.newCall(req).execute()) {
+                    if (!resp.isSuccessful() || resp.body() == null)
+                        throw new IOException("HTTP " + resp.code());
+                    long total = resp.body().contentLength();
+                    try (InputStream in  = resp.body().byteStream();
+                         OutputStream out = Files.newOutputStream(tmpZip)) {
+                        byte[] buf = new byte[16_384];
+                        long downloaded = 0;
+                        int n;
+                        while ((n = in.read(buf)) != -1) {
+                            out.write(buf, 0, n);
+                            downloaded += n;
+                            final long dl = downloaded, tot = total;
+                            Platform.runLater(() -> {
+                                if (tot > 0) bar.setProgress((double) dl / tot);
+                                info.setText(formatBytes(dl) + (tot > 0 ? " / " + formatBytes(tot) : ""));
+                            });
+                        }
+                    }
+                }
+
+                Path tmpExe = exeFile.resolveSibling("bore.exe.new");
+                try (InputStream zipIn = Files.newInputStream(tmpZip)) {
+                    PartyPanelBuilder.extractExeFromZip(zipIn, tmpExe);
+                }
+                Files.deleteIfExists(tmpZip);
+                Files.move(tmpExe, exeFile, StandardCopyOption.REPLACE_EXISTING);
+
+                Platform.runLater(() -> {
+                    closeDialog(progressDlg);
+                    Alert done = new Alert(Alert.AlertType.INFORMATION);
+                    done.initOwner(ownerStage);
+                    done.setTitle("bore actualizado");
+                    done.setHeaderText(null);
+                    done.setContentText("bore se actualizó correctamente a la versión " + remoteVersion + ".");
+                    done.show();
+                });
+
+            } catch (Exception ex) {
+                Platform.runLater(() -> {
+                    closeDialog(progressDlg);
+                    showError(ownerStage, "Error al actualizar bore: " + ex.getMessage());
+                });
             }
         });
     }
