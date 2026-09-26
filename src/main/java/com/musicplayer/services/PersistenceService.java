@@ -182,7 +182,7 @@ public class PersistenceService {
     }
 
     private static class GroupDto {
-        String  id, name, thumbnailUrl, youtubePlaylistId, description, type;
+        String  id, name, thumbnailUrl, youtubePlaylistId, description, type, sourceUrl;
         boolean youtubePlaylist;
         int     playCount = 0;
         List<SongDto> songs = new ArrayList<>();
@@ -220,6 +220,7 @@ public class PersistenceService {
             gd.description      = g.getDescription();
             gd.type             = g.getType();
             gd.playCount        = g.getPlayCount();
+            gd.sourceUrl        = g.getSourceUrl();
             for (Song s : g.getSongs()) {
                 SongDto sd = new SongDto();
                 sd.videoId       = s.getVideoId();
@@ -271,6 +272,7 @@ public class PersistenceService {
                 }
                 group.setType(gd.type != null ? gd.type : "Música");
                 group.setPlayCount(gd.playCount);
+                if (gd.sourceUrl != null) group.setSourceUrl(gd.sourceUrl);
                 result.add(group);
             }
         } catch (Exception e) {

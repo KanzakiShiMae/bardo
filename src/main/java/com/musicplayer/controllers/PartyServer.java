@@ -9,6 +9,7 @@ import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
@@ -27,6 +28,12 @@ class PartyServer {
         void onListenerVideoStatus(String name, String videoId, ListenerStatus status);
         /** Porcentaje (0-100) de descarga de {@code videoId} reportado por el listener {@code name}. */
         void onListenerVideoProgress(String name, String videoId, int percent);
+        /** La conexión de {@code name} se cayó inesperadamente; tiene una ventana de gracia para reconectar. */
+        void onListenerReconnecting(String name);
+        /** {@code name} reconectó dentro de la ventana de gracia — ya no hace falta seguir mostrando el aviso. */
+        void onListenerReconnected(String name);
+        /** Ping (ms de ida y vuelta) que {@code name} acaba de medir contra este servidor. */
+        void onListenerPing(String name, int ms);
         void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle);
         void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle);
     }
@@ -41,6 +48,24 @@ class PartyServer {
     private final Map<String, ListenerState> states  = Collections.synchronizedMap(new LinkedHashMap<>());
     private final Set<String> bannedNames = Collections.synchronizedSet(new HashSet<>());
     private volatile boolean running;
+
+    // ── Reconexión de listeners ──────────────────────────────────────────────
+    /** Cuánto se espera a que un listener con la conexión caída vuelva antes de darlo por perdido. */
+    private static final long RECONNECT_GRACE_MS = 45_000;
+    /** name -> token de la ventana de gracia activa; se invalida (se quita) si reconecta a tiempo. */
+    private final Map<String, Object> reconnectTokens = new ConcurrentHashMap<>();
+
+    // ── Estado en vivo de reproducción del Master (para resincronizar a quien se una/reconecte) ──
+    private volatile String  liveVideoId;
+    private volatile boolean liveHidden;
+    private volatile boolean livePlaying;
+    private volatile long    livePositionMs;
+    private volatile long    livePositionAtMs;
+    private volatile double  liveVolume = 1.0;
+    private volatile boolean liveLooping;
+    private volatile boolean liveLoopActive;
+    private volatile double  liveLoopInPct  = 0.0;
+    private volatile double  liveLoopOutPct = 100.0;
 
     PartyServer(int port, Callbacks callbacks) throws IOException {
         this.callbacks = callbacks;
@@ -80,6 +105,10 @@ class PartyServer {
     }
 
     void broadcastOpen(String videoId, boolean hidden) {
+        liveVideoId = videoId; liveHidden = hidden;
+        livePlaying = false; livePositionMs = 0; livePositionAtMs = System.currentTimeMillis();
+        liveVolume = 1.0; liveLooping = false;
+        liveLoopActive = false; liveLoopInPct = 0.0; liveLoopOutPct = 100.0;
         JsonObject m = new JsonObject();
         m.addProperty("type", "open");
         m.addProperty("videoId", videoId);
@@ -88,6 +117,7 @@ class PartyServer {
     }
 
     void broadcastPlay(String videoId, long positionMs) {
+        if (videoId.equals(liveVideoId)) { livePlaying = true; livePositionMs = positionMs; livePositionAtMs = System.currentTimeMillis(); }
         JsonObject m = new JsonObject();
         m.addProperty("type", "play");
         m.addProperty("videoId", videoId);
@@ -96,6 +126,7 @@ class PartyServer {
     }
 
     void broadcastPause(String videoId, long positionMs) {
+        if (videoId.equals(liveVideoId)) { livePlaying = false; livePositionMs = positionMs; livePositionAtMs = System.currentTimeMillis(); }
         JsonObject m = new JsonObject();
         m.addProperty("type", "pause");
         m.addProperty("videoId", videoId);
@@ -104,6 +135,7 @@ class PartyServer {
     }
 
     void broadcastSeek(String videoId, long positionMs) {
+        if (videoId.equals(liveVideoId)) { livePositionMs = positionMs; livePositionAtMs = System.currentTimeMillis(); }
         JsonObject m = new JsonObject();
         m.addProperty("type", "seek");
         m.addProperty("videoId", videoId);
@@ -112,6 +144,7 @@ class PartyServer {
     }
 
     void broadcastVolume(String videoId, double volume) {
+        if (videoId.equals(liveVideoId)) liveVolume = volume;
         JsonObject m = new JsonObject();
         m.addProperty("type", "volume");
         m.addProperty("videoId", videoId);
@@ -120,6 +153,7 @@ class PartyServer {
     }
 
     void broadcastLoop(String videoId, boolean looping) {
+        if (videoId.equals(liveVideoId)) liveLooping = looping;
         JsonObject m = new JsonObject();
         m.addProperty("type", "loop");
         m.addProperty("videoId", videoId);
@@ -127,7 +161,20 @@ class PartyServer {
         broadcast(gson.toJson(m));
     }
 
+    /** Marcadores de loop A/B (en % de la duración) — se replican en vivo y se cachean para resync. */
+    void broadcastLoopMarkers(String videoId, double inPct, double outPct, boolean active) {
+        if (videoId.equals(liveVideoId)) { liveLoopInPct = inPct; liveLoopOutPct = outPct; liveLoopActive = active; }
+        JsonObject m = new JsonObject();
+        m.addProperty("type", "loopMarkers");
+        m.addProperty("videoId", videoId);
+        m.addProperty("inPct", inPct);
+        m.addProperty("outPct", outPct);
+        m.addProperty("active", active);
+        broadcast(gson.toJson(m));
+    }
+
     void broadcastCloseTrack(String videoId) {
+        if (videoId.equals(liveVideoId)) { liveVideoId = null; livePlaying = false; }
         JsonObject m = new JsonObject();
         m.addProperty("type", "closeTrack");
         m.addProperty("videoId", videoId);
@@ -152,6 +199,7 @@ class PartyServer {
 
     void kickClient(String name) {
         clients.stream().filter(c -> name.equals(c.name)).findFirst().ifPresent(c -> {
+            c.skipReconnectGrace = true; // un expulsado no debe reaparecer como "reconectando"
             JsonObject m = new JsonObject();
             m.addProperty("type", "kick");
             c.send(gson.toJson(m));
@@ -162,6 +210,7 @@ class PartyServer {
     void banClient(String name) {
         bannedNames.add(name);
         clients.stream().filter(c -> name.equals(c.name)).findFirst().ifPresent(c -> {
+            c.skipReconnectGrace = true;
             JsonObject m = new JsonObject();
             m.addProperty("type", "ban");
             c.send(gson.toJson(m));
@@ -205,6 +254,8 @@ class PartyServer {
         running = false;
         sharedTracks.clear();
         bannedNames.clear();
+        reconnectTokens.clear();
+        clients.forEach(c -> c.skipReconnectGrace = true); // la sala se cierra entera, nadie debe "reconectar"
         clients.forEach(ClientHandler::close);
         try { if (serverSocket != null) serverSocket.close(); } catch (IOException ignored) {}
     }
@@ -265,6 +316,34 @@ class PartyServer {
      *  aún están eligiendo apariencia vean tachado en tiempo real lo que otro acaba de confirmar. */
     private void broadcastTaken() { broadcast(gson.toJson(buildTakenMessage())); }
 
+    /**
+     * Snapshot del estado de reproducción actual del Master (canción abierta, posición estimada
+     * ajustando el tiempo transcurrido si está sonando, volumen, loop y marcadores A/B). Se envía
+     * a cada listener justo tras el "hello" — tanto en una unión nueva como en una reconexión —
+     * para que pueda ponerse exactamente en el mismo punto que el resto de la sala.
+     */
+    private JsonObject buildSyncMessage() {
+        JsonObject m = new JsonObject();
+        m.addProperty("type", "sync");
+        String vid = liveVideoId;
+        if (vid == null) {
+            m.add("videoId", com.google.gson.JsonNull.INSTANCE);
+            return m;
+        }
+        long pos = livePositionMs;
+        if (livePlaying) pos += System.currentTimeMillis() - livePositionAtMs;
+        m.addProperty("videoId", vid);
+        m.addProperty("hidden", liveHidden);
+        m.addProperty("playing", livePlaying);
+        m.addProperty("positionMs", pos);
+        m.addProperty("volume", liveVolume);
+        m.addProperty("looping", liveLooping);
+        m.addProperty("loopActive", liveLoopActive);
+        m.addProperty("loopInPct", liveLoopInPct);
+        m.addProperty("loopOutPct", liveLoopOutPct);
+        return m;
+    }
+
     private void onMessage(ClientHandler handler, String json) {
         try {
             JsonObject msg = gson.fromJson(json, JsonObject.class);
@@ -279,6 +358,21 @@ class PartyServer {
                 }
                 // El avatar/color se eligen en un paso posterior (chooseAppearance),
                 // una vez el listener ya está dentro de la sala — no se validan aquí.
+
+                // ¿Es una reconexión dentro de la ventana de gracia? Si es así, su entrada en
+                // "states" (con su avatar/color) se conservó intacta — se restauran en el nuevo
+                // handler para que no tenga que volver a elegir apariencia.
+                if (handler.name != null && reconnectTokens.remove(handler.name) != null) {
+                    ListenerState prev = states.get(handler.name);
+                    if (prev != null) { handler.emoji = prev.emoji(); handler.color = prev.color(); }
+                    String rname = handler.name;
+                    Platform.runLater(() -> callbacks.onListenerReconnected(rname));
+                }
+            }
+
+            if ("leave".equals(type)) {
+                handler.skipReconnectGrace = true; // salida voluntaria — no dar ventana de gracia
+                return;
             }
 
             String name = handler.name != null ? handler.name : handler.socket.getInetAddress().getHostAddress();
@@ -362,6 +456,26 @@ class PartyServer {
                 return;
             }
 
+            if ("ping".equals(type)) {
+                // Eco inmediato — el cliente mide su propio RTT contra la respuesta.
+                if (msg.has("ts")) {
+                    JsonObject pong = new JsonObject();
+                    pong.addProperty("type", "pong");
+                    pong.addProperty("ts", msg.get("ts").getAsLong());
+                    handler.send(gson.toJson(pong));
+                }
+                return;
+            }
+
+            if ("pingReport".equals(type)) {
+                if (handler.name != null && msg.has("ms")) {
+                    int ms = msg.get("ms").getAsInt();
+                    String pname = handler.name;
+                    Platform.runLater(() -> callbacks.onListenerPing(pname, ms));
+                }
+                return;
+            }
+
             ListenerStatus status = switch (type) {
                 case "hello"       -> ListenerStatus.CONNECTING;
                 case "downloading" -> ListenerStatus.DOWNLOADING;
@@ -380,6 +494,7 @@ class PartyServer {
                 welcome.addProperty("type", "welcome");
                 handler.send(gson.toJson(welcome));
                 handler.send(gson.toJson(buildTakenMessage()));
+                handler.send(gson.toJson(buildSyncMessage()));
                 for (TrackRecord t : sharedTracks) {
                     JsonObject tm = new JsonObject();
                     tm.addProperty("type", "track");
@@ -408,12 +523,32 @@ class PartyServer {
     private void onDisconnect(ClientHandler handler) {
         clients.remove(handler);
         String name = handler.name;
-        if (name != null) {
-            states.remove(name);
-            broadcastMembers();
-            broadcastTaken(); // libera su avatar/color para quien siga eligiendo apariencia
-            Platform.runLater(() -> callbacks.onListenerDisconnect(name));
+        if (name == null) return;
+
+        if (handler.skipReconnectGrace) {
+            finalizeDisconnect(name);
+            return;
         }
+
+        // Caída inesperada: se le da una ventana de gracia para reconectar antes de darlo por
+        // perdido de verdad. Mientras tanto su entrada en "states" (avatar/color incluidos)
+        // se conserva intacta, así que nadie más puede robarle su apariencia.
+        Object token = new Object();
+        reconnectTokens.put(name, token);
+        Platform.runLater(() -> callbacks.onListenerReconnecting(name));
+        Thread timeout = new Thread(() -> {
+            try { Thread.sleep(RECONNECT_GRACE_MS); } catch (InterruptedException ignored) { return; }
+            if (reconnectTokens.remove(name, token)) finalizeDisconnect(name);
+        }, "party-reconnect-timeout-" + name);
+        timeout.setDaemon(true);
+        timeout.start();
+    }
+
+    private void finalizeDisconnect(String name) {
+        states.remove(name);
+        broadcastMembers();
+        broadcastTaken(); // libera su avatar/color para quien siga eligiendo apariencia
+        Platform.runLater(() -> callbacks.onListenerDisconnect(name));
     }
 
     private class ClientHandler {
@@ -421,6 +556,8 @@ class PartyServer {
         String name;
         String emoji; // null hasta que el listener confirma su apariencia (chooseAppearance)
         String color; // null hasta que el listener confirma su apariencia (chooseAppearance)
+        /** true si la desconexión es voluntaria (leave/kick/ban) o la sala se está cerrando entera. */
+        volatile boolean skipReconnectGrace = false;
         private PrintWriter out;
 
         ClientHandler(Socket socket) { this.socket = socket; }

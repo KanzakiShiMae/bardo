@@ -27,6 +27,8 @@
                            onAction="#onSearchAction" />
                 <Button fx:id="btnSearchGo" text="⌕" styleClass="search-go-btn"
                         onAction="#onSearchAction" />
+                <ToggleButton fx:id="btnUrlMode" styleClass="search-go-btn"
+                              onAction="#onToggleUrlMode" />
             </HBox>
 
             <HBox alignment="CENTER" HBox.hgrow="ALWAYS">

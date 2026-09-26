@@ -10,6 +10,7 @@ import com.musicplayer.services.PersistenceService;
 import com.musicplayer.services.SpectrogramService;
 import com.musicplayer.services.YouTubeQuotaTracker;
 import com.musicplayer.services.YouTubeService;
+import com.musicplayer.services.YtDlpMetadataService;
 import javafx.animation.*;
 import org.kordamp.ikonli.Ikon;
 import org.kordamp.ikonli.javafx.FontIcon;
@@ -134,6 +135,7 @@ public class MainController implements Initializable {
 
     @FXML private TextField         searchField;
     @FXML private Button            btnSearchGo, btnSearchVideos, btnSearchPlaylists;
+    @FXML private ToggleButton      btnUrlMode;
     @FXML private Button            btnOpenBrowser, btnSwitchPlayer;
     @FXML private FlowPane          searchResultsPane;
     @FXML private Label             searchStatusLabel;
@@ -179,6 +181,7 @@ public class MainController implements Initializable {
     private LibraryService      libraryService;
     private DownloadService     downloadService;
     private SpectrogramService  spectrogramService;
+    private YtDlpMetadataService ytDlpMetadataService;
 
     private final Set<String>          downloadingNow = new HashSet<>();
     private final List<AppTab>         openTabs       = new ArrayList<>();
@@ -241,6 +244,7 @@ public class MainController implements Initializable {
         quotaTracker    = new YouTubeQuotaTracker(apiKey);
         youTubeService  = new YouTubeService(apiKey, quotaTracker);
         downloadService = new DownloadService();
+        ytDlpMetadataService = new YtDlpMetadataService(downloadService);
         quotaTracker.exhaustedProperty().addListener((obs, wasEx, isEx) -> {
             if (isEx) showToast("Cuota de YouTube API agotada. La búsqueda se reanudará a medianoche (hora del Pacífico).");
         });
@@ -345,6 +349,8 @@ public class MainController implements Initializable {
         ico(btnSearchGo,         BoxiconsSolid.SEARCH,      15, false); btnSearchGo.setText("");
         ico(btnSearchVideos,     BoxiconsSolid.MUSIC,       14, true);  btnSearchVideos.setText(" Videos");
         ico(btnSearchPlaylists,  BoxiconsRegular.LIST_UL,   14, true);  btnSearchPlaylists.setText(" Playlists");
+        ico(btnUrlMode,          BoxiconsRegular.LINK_ALT,  14, false); btnUrlMode.setText("");
+        btnUrlMode.setTooltip(new Tooltip("Introduce URL (descarga directa sin API de YouTube)"));
 
         // Navegación lateral — color principal
         ico(btnHome,     BoxiconsSolid.HOME,         17, true); btnHome.setText("  Inicio");
@@ -365,7 +371,7 @@ public class MainController implements Initializable {
         ico(btnSwitchPlayer, BoxiconsRegular.TRANSFER_ALT,  15, false); btnSwitchPlayer.setText("");
     }
 
-    static void ico(Button btn, Ikon ikon, int size, boolean primary) {
+    static void ico(ButtonBase btn, Ikon ikon, int size, boolean primary) {
         if (btn == null) return;
         FontIcon fi = new FontIcon(ikon);
         fi.setIconSize(size);
@@ -998,8 +1004,10 @@ public class MainController implements Initializable {
             }
         );
         themeManager.applyContrastStroke(pi.panel, "bardo-text", "bardo-player-bg1");
-        if (pi.isMasterPartyPlayer && partyPanelBuilder != null)
+        if (pi.isMasterPartyPlayer && partyPanelBuilder != null) {
             pi.onPartySeek = posMs -> { if (pi.song != null) partyPanelBuilder.masterBroadcastSeek(pi.song.getVideoId(), posMs); };
+            pi.onPartyMarkersChanged = () -> { if (pi.song != null) partyPanelBuilder.masterBroadcastLoopMarkers(pi.song.getVideoId(), pi.loopInPct, pi.loopOutPct, pi.loopMarkersActive); };
+        }
     }
 
     private void toggleInlineSpectrogram(PlayerInstance pi) {
@@ -1660,8 +1668,18 @@ public class MainController implements Initializable {
         if (!searchField.getText().trim().isEmpty()) onSearchAction();
     }
 
+    @FXML private void onToggleUrlMode() {
+        boolean urlMode = btnUrlMode.isSelected();
+        UIUtils.toggleStyleClass(btnUrlMode, "toggle-btn-active", urlMode);
+        searchField.setPromptText(urlMode
+            ? "Pega la URL de un vídeo o playlist…"
+            : "Buscar en YouTube…");
+    }
+
     @FXML private void onSearchAction() {
         String query = searchField.getText().trim(); if (query.isEmpty()) return;
+
+        if (btnUrlMode.isSelected()) { handleUrlOnlyInput(query); return; }
 
         // ── Detect YouTube URL ────────────────────────────────────────────────
         String videoId    = extractYouTubeVideoId(query);
@@ -1741,6 +1759,60 @@ public class MainController implements Initializable {
                     CardBuilder.playlistCard(pl, () -> importPlaylistToLibrary(pl)));
             }))
             .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
+    }
+
+    // ── URL mode (sin YouTube Data API, vía yt-dlp) ─────────────────────────────
+
+    private void handleUrlOnlyInput(String query) {
+        String videoId    = extractYouTubeVideoId(query);
+        String playlistId = extractYouTubePlaylistId(query);
+
+        if (playlistId != null) { fetchPlaylistByUrlNoApi(playlistId, query); return; }
+        if (videoId    != null) { fetchVideoByUrlNoApi(videoId);              return; }
+        showToast("URL no reconocida. Pega un enlace de vídeo o playlist de YouTube.");
+    }
+
+    private void fetchVideoByUrlNoApi(String videoId) {
+        openTab("search", BoxiconsSolid.SEARCH, "vídeo", searchPanel, true, null);
+        searchStatusLabel.setText("Obteniendo vídeo…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        ytDlpMetadataService.fetchVideo(videoId)
+            .thenAccept(song -> Platform.runLater(() -> {
+                searchSpinner.setVisible(false);
+                searchStatusLabel.setText("1 resultado");
+                searchResultsPane.getChildren().add(
+                    CardBuilder.songCard(song, () -> downloadAndPlay(song, null), UIUtils::openInBrowser, this::showGroupSelector, libraryService));
+            }))
+            .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Vídeo no encontrado."); }); return null; });
+    }
+
+    private void fetchPlaylistByUrlNoApi(String playlistId, String originalUrl) {
+        openTab("search", BoxiconsSolid.SEARCH, "playlist", searchPanel, true, null);
+        searchStatusLabel.setText("Obteniendo playlist…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        ytDlpMetadataService.fetchPlaylist(originalUrl, playlistId)
+            .thenAccept(pl -> Platform.runLater(() -> {
+                searchSpinner.setVisible(false);
+                searchStatusLabel.setText("1 playlist");
+                YouTubePlaylistInfo info = new YouTubePlaylistInfo(
+                    pl.playlistId(), pl.title(), "", pl.thumbnailUrl(), "");
+                info.setItemCount(pl.songs().size());
+                searchResultsPane.getChildren().add(
+                    CardBuilder.playlistCard(info, () -> importPlaylistToLibraryNoApi(pl, originalUrl)));
+            }))
+            .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Playlist no encontrada."); }); return null; });
+    }
+
+    private void importPlaylistToLibraryNoApi(YtDlpMetadataService.PlaylistResult pl, String originalUrl) {
+        if (libraryService.getGroups().stream().anyMatch(g -> g.getId().equals(pl.playlistId()))) {
+            showToast("Ya está en tu biblioteca"); return;
+        }
+        LibraryGroup group = LibraryGroup.fromYouTubePlaylist(pl.playlistId(), pl.title(), pl.thumbnailUrl(), "");
+        group.setSourceUrl(originalUrl);
+        pl.songs().forEach(group::addSong);
+        libraryService.addGroup(group);
+        refreshLibraryPanel();
+        showToast("«" + pl.title() + "» añadida a la biblioteca");
     }
 
     @FXML private void onQuickSearchRecent()    { searchField.setText("top hits 2024");  onSearchAction(); }
@@ -1884,7 +1956,13 @@ public class MainController implements Initializable {
             contentArea.getScene().getWindow(),
             getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm());
 
-        youTubeService.getPlaylistItems(group.getYoutubePlaylistId(), progress::update)
+        CompletableFuture<List<Song>> fetch = group.getSourceUrl() != null
+            ? ytDlpMetadataService.fetchPlaylist(group.getSourceUrl(), group.getYoutubePlaylistId())
+                .thenApply(r -> (List<Song>) r.songs())
+            : youTubeService.getPlaylistItems(group.getYoutubePlaylistId(), progress::update)
+                .thenApply(songs -> (List<Song>) songs);
+
+        fetch
             .thenAccept(songs -> Platform.runLater(() -> {
                 progress.close();
                 // Update durations of songs already in the group
@@ -2047,10 +2125,37 @@ public class MainController implements Initializable {
             if (!pinned.isEmpty()) {
                 Label sectionLbl = new Label("CANCIONES PINEADAS");
                 sectionLbl.getStyleClass().add("sidebar-section-label");
+
+                Button allToPartyBtn = new Button("  Enviar todas a la sala");
+                allToPartyBtn.getStyleClass().add("btn-secondary");
+                allToPartyBtn.setStyle("-fx-font-size: 11px; -fx-padding: 3 10;");
+                ico(allToPartyBtn, BoxiconsSolid.MEGAPHONE, 12, true);
+                allToPartyBtn.visibleProperty().bind(partyPanelBuilder.isMasterProperty());
+                allToPartyBtn.managedProperty().bind(partyPanelBuilder.isMasterProperty());
+                allToPartyBtn.setOnAction(e -> partyPanelBuilder.addSongsToParty(pinned));
+
+                Region sectionHeaderSpacer = new Region();
+                HBox.setHgrow(sectionHeaderSpacer, Priority.ALWAYS);
+
+                Button unpinAllBtn = new Button();
+                unpinAllBtn.getStyleClass().add("btn-secondary");
+                unpinAllBtn.setStyle("-fx-font-size: 10px; -fx-padding: 3 7; -fx-opacity: 0.55;");
+                ico(unpinAllBtn, BoxiconsRegular.BOOKMARK, 11, false);
+                unpinAllBtn.setTooltip(new Tooltip("Despinear todas"));
+                unpinAllBtn.setOnAction(e -> {
+                    new java.util.ArrayList<>(pinned).forEach(s -> libraryService.unpinSong(s.getVideoId()));
+                    SoundPlayer.play("crash");
+                    refreshHomePanel();
+                });
+
+                HBox sectionHeaderRow = new HBox(12, sectionLbl, allToPartyBtn, sectionHeaderSpacer, unpinAllBtn);
+                sectionHeaderRow.setAlignment(Pos.CENTER_LEFT);
+                HBox.setHgrow(sectionLbl, Priority.NEVER);
+
                 javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
                 pinnedFlow.setAlignment(Pos.TOP_LEFT);
                 pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
-                sections.getChildren().addAll(sectionLbl, pinnedFlow);
+                sections.getChildren().addAll(sectionHeaderRow, pinnedFlow);
             }
 
             if (!top.isEmpty()) {
@@ -2203,11 +2308,28 @@ public class MainController implements Initializable {
         StackPane.setMargin(unpinBtn, new javafx.geometry.Insets(7, 7, 0, 0));
         unpinBtn.setOnAction(e -> { libraryService.unpinSong(song.getVideoId()); refreshHomePanel(); });
 
-        StackPane imgContainer = new StackPane(imgView, unpinBtn);
+        Button partyBtn = new Button();
+        partyBtn.getStyleClass().add("home-overlay-btn");
+        ico(partyBtn, BoxiconsSolid.MEGAPHONE, 14, false);
+        partyBtn.setOpacity(0);
+        partyBtn.setTooltip(new Tooltip("Añadir a la sala"));
+        partyBtn.visibleProperty().bind(partyPanelBuilder.isMasterProperty());
+        partyBtn.managedProperty().bind(partyPanelBuilder.isMasterProperty());
+        StackPane.setAlignment(partyBtn, Pos.TOP_LEFT);
+        StackPane.setMargin(partyBtn, new javafx.geometry.Insets(7, 0, 0, 7));
+        partyBtn.setOnAction(e -> partyPanelBuilder.addSongToParty(song));
+
+        StackPane imgContainer = new StackPane(imgView, unpinBtn, partyBtn);
         imgContainer.setPrefSize(160, 90); imgContainer.setMaxSize(160, 90);
         imgContainer.getStyleClass().add("home-playlist-thumb");
-        imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(1); ft.play(); });
-        imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(0); ft.play(); });
+        imgContainer.setOnMouseEntered(e -> {
+            FadeTransition ftUnpin = new FadeTransition(Duration.millis(150), unpinBtn); ftUnpin.setToValue(1); ftUnpin.play();
+            FadeTransition ftParty = new FadeTransition(Duration.millis(150), partyBtn);  ftParty.setToValue(1); ftParty.play();
+        });
+        imgContainer.setOnMouseExited(e  -> {
+            FadeTransition ftUnpin = new FadeTransition(Duration.millis(150), unpinBtn); ftUnpin.setToValue(0); ftUnpin.play();
+            FadeTransition ftParty = new FadeTransition(Duration.millis(150), partyBtn);  ftParty.setToValue(0); ftParty.play();
+        });
         imgContainer.setOnMouseClicked(e -> {
             if (e.getTarget() instanceof Button) return;
             if (e.getButton() == javafx.scene.input.MouseButton.MIDDLE) { openSongPaused(song, null); return; }

@@ -55,15 +55,54 @@ class PartyPanelBuilder {
     private final SimpleBooleanProperty masterActive = new SimpleBooleanProperty(false);
     ReadOnlyBooleanProperty isMasterProperty() { return masterActive; }
 
+    /** Añade una única canción a la sala (p.ej. el megáfono de una pestaña/fila) — suena "bit". */
     void addSongToParty(Song song) {
-        if (partyServer == null || song == null) return;
+        if (addSongToPartyQuiet(song)) {
+            SoundPlayer.play("bit");
+            refreshSongList();
+        }
+    }
+
+    /** Añade varias canciones de golpe (p.ej. "Enviar todas a la sala") — suena "fium" una sola
+     *  vez para todo el lote, en vez de "bit" por cada canción. */
+    void addSongsToParty(java.util.List<Song> songs) {
+        if (songs == null || songs.isEmpty()) return;
+        boolean addedAny = false;
+        for (Song song : songs) {
+            if (addSongToPartyQuiet(song)) addedAny = true;
+        }
+        if (addedAny) {
+            SoundPlayer.play("fium");
+            refreshSongList();
+        }
+    }
+
+    /** Añade {@code song} a la sala sin sonido ni refresco de UI (los llamantes deciden eso).
+     *  @return true si se añadió de verdad (false si ya estaba en la sala o no hay sala activa). */
+    private boolean addSongToPartyQuiet(Song song) {
+        if (partyServer == null || song == null) return false;
         String videoId = song.getVideoId();
-        if (sharedSongs.stream().anyMatch(s -> s.videoId.equals(videoId))) return;
+        if (sharedSongs.stream().anyMatch(s -> s.videoId.equals(videoId))) return false;
         SharedSong shared = new SharedSong(song);
         sharedSongs.add(shared);
         songStatus.put(videoId, new LinkedHashMap<>());
         // Broadcast immediately so listeners start downloading before master hits play
         partyServer.broadcastTrack(shared.videoId, shared.title, shared.thumbnailUrl, shared.hidden);
+        return true;
+    }
+
+    /** Elimina todas las canciones de la sala de golpe (botón "vaciar sala" del Master) — suena "crash". */
+    private void clearAllSongs() {
+        if (sharedSongs.isEmpty()) return;
+        for (SharedSong shared : new ArrayList<>(sharedSongs)) {
+            songStatus.remove(shared.videoId);
+            songProgress.remove(shared.videoId);
+            songSuccessNotified.remove(shared.videoId);
+            songErrorNotified.remove(shared.videoId);
+            if (partyServer != null) partyServer.broadcastRemoveTrack(shared.videoId);
+        }
+        sharedSongs.clear();
+        SoundPlayer.play("crash");
         refreshSongList();
     }
 
@@ -91,8 +130,15 @@ class PartyPanelBuilder {
     private final Map<String, LinkedHashMap<String, PartyServer.ListenerStatus>> songStatus = new LinkedHashMap<>();
     /** videoId -> (nombre del listener -> % de descarga, 0-100), solo mientras está DOWNLOADING. */
     private final Map<String, Map<String, Integer>> songProgress = new LinkedHashMap<>();
+    /** videoIds para los que ya se avisó (sonido) de éxito/fallo en la ronda de descarga actual. */
+    private final Set<String> songSuccessNotified = new HashSet<>();
+    private final Set<String> songErrorNotified = new HashSet<>();
     /** Nombres de todos los listeners conectados, hayan elegido apariencia o no (para que el Master los vea a todos). */
     private final LinkedHashSet<String> connectedListenerNames = new LinkedHashSet<>();
+    /** Nombres de listeners con la conexión caída pero dentro de su ventana de gracia para reconectar. */
+    private final Set<String> reconnectingListeners = new HashSet<>();
+    /** Último ping (ms) reportado por cada listener. */
+    private final Map<String, Integer> listenerPings = new HashMap<>();
 
     // ── Estado Master (extras) ────────────────────────────────────────────────
     private VBox masterMemberListBox;
@@ -123,6 +169,11 @@ class PartyPanelBuilder {
     private String pendingSelectedColor;
     private Label appearanceErrorLbl;
     private Button appearanceConfirmBtn;
+    // Reconexión automática tras una caída de conexión (sin salir de la sala)
+    private Label listenerReconnectBanner;
+    private Label listenerPingLbl;
+    /** Último snapshot de reproducción del Master recibido; se aplica en cuanto la canción esté descargada. */
+    private PartyClient.SyncState pendingSync;
 
     PartyPanelBuilder(MainController mc, DownloadService downloadService) {
         this.mc = mc;
@@ -245,12 +296,20 @@ class PartyPanelBuilder {
         listenerColors.clear();
         songStatus.clear();
         songProgress.clear();
+        songSuccessNotified.clear();
+        songErrorNotified.clear();
         connectedListenerNames.clear();
+        reconnectingListeners.clear();
+        listenerPings.clear();
 
         try {
             partyServer = new PartyServer(requestedPort, new PartyServer.Callbacks() {
                 @Override public void onListenerUpdate(String name, PartyServer.ListenerStatus status, String note, String emoji, String color) {
-                    connectedListenerNames.add(name);
+                    // add() devuelve true solo la primera vez — no en sucesivas actualizaciones de
+                    // estado (downloading/ready/error) ni en una reconexión (el nombre se conserva
+                    // durante toda la ventana de gracia, nunca se quita salvo desconexión definitiva).
+                    boolean justJoined = connectedListenerNames.add(name);
+                    if (justJoined) SoundPlayer.play("cute");
                     // emoji/color son null hasta que el listener confirma su apariencia:
                     // mientras tanto no se guardan, así el Master lo renderiza solo con el nombre.
                     if (emoji != null) listenerEmojis.put(name, emoji); else listenerEmojis.remove(name);
@@ -263,6 +322,8 @@ class PartyPanelBuilder {
                     listenerColors.remove(name);
                     songStatus.values().forEach(m -> m.remove(name));
                     songProgress.values().forEach(m -> m.remove(name));
+                    listenerPings.remove(name);
+                    SoundPlayer.play("leave");
                     updateMasterMemberList();
                     refreshSongList();
                 }
@@ -275,11 +336,37 @@ class PartyPanelBuilder {
                         Map<String, Integer> prog = songProgress.get(videoId);
                         if (prog != null) prog.remove(name);
                     }
+
+                    if (status == PartyServer.ListenerStatus.DOWNLOADING) {
+                        // Nueva ronda de descarga (o redescarga) para esta canción: se puede
+                        // volver a avisar de éxito/fallo cuando termine.
+                        songSuccessNotified.remove(videoId);
+                        songErrorNotified.remove(videoId);
+                    } else if (status == PartyServer.ListenerStatus.ERROR) {
+                        if (songErrorNotified.add(videoId)) SoundPlayer.play("nop");
+                    } else if (status == PartyServer.ListenerStatus.READY) {
+                        boolean allReady = !connectedListenerNames.isEmpty()
+                            && connectedListenerNames.stream().allMatch(n -> statuses.get(n) == PartyServer.ListenerStatus.READY);
+                        if (allReady && songSuccessNotified.add(videoId)) SoundPlayer.play("ok");
+                    }
+
                     refreshSongList();
                 }
                 @Override public void onListenerVideoProgress(String name, String videoId, int percent) {
                     songProgress.computeIfAbsent(videoId, k -> new LinkedHashMap<>()).put(name, percent);
                     refreshSongList();
+                }
+                @Override public void onListenerReconnecting(String name) {
+                    reconnectingListeners.add(name);
+                    updateMasterMemberList();
+                }
+                @Override public void onListenerReconnected(String name) {
+                    reconnectingListeners.remove(name);
+                    updateMasterMemberList();
+                }
+                @Override public void onListenerPing(String name, int ms) {
+                    listenerPings.put(name, ms);
+                    updateMasterMemberList();
                 }
                 @Override public void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle) {
                     PartyPanelBuilder.this.addMasterChatMessage(name, emoji, color, text, songRefVideoId, songRefTitle);
@@ -294,6 +381,7 @@ class PartyPanelBuilder {
             showError("No se pudo iniciar el servidor: " + e.getMessage());
             return;
         }
+        SoundPlayer.play("init");
 
         masterActive.set(true);
         int port = partyServer.getPort();
@@ -353,13 +441,14 @@ class PartyPanelBuilder {
                 String memberEmoji = listenerEmojis.get(memberName);
                 String memberColor = listenerColors.get(memberName);
                 boolean appearanceChosen = memberEmoji != null && memberColor != null;
+                boolean reconnecting = reconnectingListeners.contains(memberName);
 
                 Label dot = new Label("●");
                 dot.setStyle("-fx-font-size: 9px; -fx-text-fill: " + (appearanceChosen ? memberColor : "#636e72") + ";");
 
                 Label lbl;
                 if (appearanceChosen) {
-                    lbl = new Label("  " + memberName);
+                    lbl = new Label("  " + memberName + (reconnecting ? "  (reconectando…)" : ""));
                     lbl.setGraphic(avatarFi(memberEmoji, 15, memberColor));
                     lbl.setStyle("-fx-font-size: 13px; -fx-font-weight: bold; -fx-text-fill: " + memberColor + ";");
                 } else {
@@ -367,6 +456,26 @@ class PartyPanelBuilder {
                     lbl.setStyle("-fx-font-size: 13px; -fx-font-style: italic; -fx-text-fill: #8a7a9a;");
                 }
                 HBox.setHgrow(lbl, Priority.ALWAYS);
+
+                FontIcon reconnIco = null;
+                if (reconnecting) {
+                    reconnIco = new FontIcon(BoxiconsRegular.REFRESH);
+                    reconnIco.setIconSize(13);
+                    reconnIco.setIconColor(javafx.scene.paint.Color.web("#fdcb6e"));
+                    RotateTransition spin = new RotateTransition(Duration.seconds(1.2), reconnIco);
+                    spin.setByAngle(360); spin.setCycleCount(Animation.INDEFINITE); spin.setInterpolator(Interpolator.LINEAR);
+                    spin.play();
+                    Tooltip.install(reconnIco, new Tooltip("Se le cayó la conexión — reconectando automáticamente…"));
+                }
+
+                Integer ping = listenerPings.get(memberName);
+                Label pingLbl = null;
+                if (ping != null) {
+                    String pingColor = ping < 100 ? "#00b894" : ping < 250 ? "#fdcb6e" : "#e17055";
+                    pingLbl = new Label(ping + " ms");
+                    pingLbl.setStyle("-fx-font-size: 10px; -fx-text-fill: " + pingColor + ";");
+                    pingLbl.setTooltip(new Tooltip("Ping"));
+                }
 
                 Button moreBtn = new Button();
                 moreBtn.getStyleClass().add("btn-secondary");
@@ -389,7 +498,13 @@ class PartyPanelBuilder {
 
                 String rowBase = "-fx-background-color: rgba(255,255,255,0.04); -fx-background-radius: 6; -fx-padding: 4 8;";
                 String rowHover = "-fx-background-color: rgba(255,255,255,0.09); -fx-background-radius: 6; -fx-padding: 4 8;";
-                HBox row = new HBox(8, dot, lbl, moreBtn);
+                List<javafx.scene.Node> rowChildren = new ArrayList<>();
+                rowChildren.add(dot);
+                if (reconnIco != null) rowChildren.add(reconnIco);
+                rowChildren.add(lbl);
+                if (pingLbl != null) rowChildren.add(pingLbl);
+                rowChildren.add(moreBtn);
+                HBox row = new HBox(8, rowChildren.toArray(new javafx.scene.Node[0]));
                 row.setAlignment(Pos.CENTER_LEFT);
                 row.setStyle(rowBase);
                 row.setOnMouseEntered(e -> { moreBtn.setOpacity(1.0); row.setStyle(rowHover); });
@@ -401,6 +516,7 @@ class PartyPanelBuilder {
 
     private void addMasterChatMessage(String name, String emoji, String nameColor, String text, String songRefVideoId, String songRefTitle) {
         if (masterChatBox == null) return;
+        SoundPlayer.play("toc");
         boolean isMaster = "Master".equals(name);
         Label header = new Label("  " + name);
         header.setGraphic(avatarFi(emoji, 13, nameColor));
@@ -598,6 +714,8 @@ class PartyPanelBuilder {
                 sharedSongs.remove(shared);
                 songStatus.remove(shared.videoId);
                 songProgress.remove(shared.videoId);
+                songSuccessNotified.remove(shared.videoId);
+                songErrorNotified.remove(shared.videoId);
                 if (partyServer != null) partyServer.broadcastRemoveTrack(shared.videoId);
                 refreshSongList();
             });
@@ -610,6 +728,7 @@ class PartyPanelBuilder {
             playPartyBtn.setOnAction(e -> {
                 if (partyServer != null) partyServer.broadcastOpen(shared.videoId, shared.hidden);
                 mc.openMasterPartyPlayer(shared.song);
+                SoundPlayer.play(shared.hidden ? "silent" : "add");
             });
 
             HBox buttonsRow = new HBox(5, hideToggleBtn, redownloadBtn, deleteBtn, playPartyBtn);
@@ -713,6 +832,19 @@ class PartyPanelBuilder {
         Label songsHeader = new Label("CANCIONES EN SALA");
         songsHeader.getStyleClass().add("sidebar-section-label");
 
+        Region songsHeaderSpacer = new Region();
+        HBox.setHgrow(songsHeaderSpacer, Priority.ALWAYS);
+
+        Button clearSongsBtn = new Button();
+        clearSongsBtn.getStyleClass().add("btn-secondary");
+        clearSongsBtn.setStyle("-fx-padding: 1 6;");
+        MainController.ico(clearSongsBtn, BoxiconsSolid.TRASH, 12, false);
+        clearSongsBtn.setTooltip(new Tooltip("Eliminar todas las canciones de la sala"));
+        clearSongsBtn.setOnAction(e -> clearAllSongs());
+
+        HBox songsHeaderRow = new HBox(6, songsHeader, songsHeaderSpacer, clearSongsBtn);
+        songsHeaderRow.setAlignment(Pos.CENTER_LEFT);
+
         songListBox = new VBox(6);
         songListBox.setPadding(new Insets(2, 0, 2, 0));
         Label songPh = new Label("Aún no has añadido ninguna canción.");
@@ -726,7 +858,7 @@ class PartyPanelBuilder {
         songsScroll.getStyleClass().add("results-scroll");
         VBox.setVgrow(songsScroll, Priority.ALWAYS);
 
-        VBox songsPane = new VBox(8, songsHeader, songsScroll);
+        VBox songsPane = new VBox(8, songsHeaderRow, songsScroll);
         songsPane.setPadding(new Insets(10, 12, 8, 12));
         songsPane.setMinWidth(140);
 
@@ -795,7 +927,11 @@ class PartyPanelBuilder {
             masterMemberListBox = null; masterChatBox = null; masterChatScrollPane = null;
             sharedSongs.clear(); listenerEmojis.clear(); listenerColors.clear(); songStatus.clear();
             songProgress.clear();
+            songSuccessNotified.clear();
+            songErrorNotified.clear();
             connectedListenerNames.clear();
+            reconnectingListeners.clear();
+            listenerPings.clear();
             showLanding();
         });
 
@@ -1058,9 +1194,35 @@ class PartyPanelBuilder {
         takenEmojis = new HashSet<>();
         takenColors = new HashSet<>();
         appearanceRefresh = null;
+        pendingSync = null;
 
-        partyClient = new PartyClient(host, port, nickname, downloadService, new PartyClient.Callbacks() {
+        // Un PartyClient "viejo" (de una sesión ya abandonada: se salió y volvió a entrar, o una
+        // descarga en curso termina tarde tras dejar la sala) no debe poder pisar el estado de una
+        // sesión nueva si ya se reemplazó. Se envuelve el Callbacks real en un proxy que ignora
+        // cualquier llamada que no venga del PartyClient actualmente activo (partyClient == self).
+        PartyClient[] selfHolder = new PartyClient[1];
+        PartyClient.Callbacks impl = new PartyClient.Callbacks() {
             @Override public void onConnected() { showAppearanceForm(); }
+            @Override public void onConnectionLost(String reason) {
+                if (listenerReconnectBanner != null) {
+                    listenerReconnectBanner.setText(" Conexión perdida — reconectando…");
+                    listenerReconnectBanner.setVisible(true); listenerReconnectBanner.setManaged(true);
+                }
+                if (listenerSyncLbl != null) listenerSyncLbl.setText("⚠ Reconectando…");
+            }
+            @Override public void onReconnected() {
+                if (listenerReconnectBanner != null) {
+                    listenerReconnectBanner.setVisible(false); listenerReconnectBanner.setManaged(false);
+                }
+                // El servidor reenvía taken/sync/sharedTracks tras cada "hello", incluido este —
+                // en cuanto llegue el próximo "sync" (o si ya lo teníamos) se resincroniza solo.
+            }
+            @Override public void onPing(int ms) {
+                if (listenerPingLbl == null) return;
+                String c = ms < 100 ? "#00b894" : ms < 250 ? "#fdcb6e" : "#e17055";
+                listenerPingLbl.setText(" " + ms + " ms");
+                listenerPingLbl.setStyle("-fx-font-size: 11px; -fx-text-fill: " + c + ";");
+            }
             @Override public void onTakenUpdate(Set<String> emojis, Set<String> colors) {
                 takenEmojis = emojis;
                 takenColors = colors;
@@ -1090,7 +1252,19 @@ class PartyPanelBuilder {
                 if (listenerTrackLbl != null)
                     listenerTrackLbl.setText(isHidden ? "✅ Listo" : "✅ " + song.getTitle());
                 pendingSongs.put(song.getVideoId(), song);
-                // Player opens only when master broadcasts "open" — wait for onOpen
+                // Si esta es justo la canción que el Master tiene sonando ahora mismo (nos unimos o
+                // reconectamos mientras ya estaba en marcha), abrir + sincronizar en cuanto esté lista
+                // en vez de esperar un "open" en vivo que ya pasó y nunca nos llegó.
+                if (pendingSync != null && song.getVideoId().equals(pendingSync.videoId()) && !partyPlayers.containsKey(song.getVideoId()))
+                    applySync(pendingSync);
+                // Si no, el player se abre cuando el Master emita "open" (ver onOpen).
+            }
+            @Override public void onTrackError(String videoId, String message) {
+                // Falla la descarga de ESTA canción — no se sale de la sala, se sigue conectado.
+                String title = knownSongs.getOrDefault(videoId, videoId);
+                if (listenerTrackLbl != null && videoId.equals(currentListenerVideoId))
+                    listenerTrackLbl.setText("❌ Error al descargar «" + title + "»");
+                mc.showToast("No se pudo descargar «" + title + "» — puede que el vídeo ya no esté disponible");
             }
             @Override public void onOpen(String videoId, boolean hidden) {
                 Song song = pendingSongs.get(videoId);
@@ -1137,6 +1311,18 @@ class PartyPanelBuilder {
                 PlayerInstance pi = partyPlayers.get(videoId);
                 if (pi != null) pi.looping = looping;
             }
+            @Override public void onLoopMarkers(String videoId, double inPct, double outPct, boolean active) {
+                PlayerInstance pi = partyPlayers.get(videoId);
+                if (pi == null) return;
+                pi.loopInPct = inPct; pi.loopOutPct = outPct; pi.loopMarkersActive = active;
+                if (pi.spectroRedraw != null) pi.spectroRedraw.run();
+            }
+            @Override public void onSync(PartyClient.SyncState sync) {
+                pendingSync = sync;
+                if (sync.videoId() != null && pendingSongs.containsKey(sync.videoId()))
+                    applySync(sync);
+                // Si no está descargada todavía, se aplicará desde onTrackReady en cuanto lo esté.
+            }
             @Override public void onCloseTrack(String videoId) {
                 hiddenListenerTracks.remove(videoId);
                 if (videoId.equals(currentListenerVideoId)) currentListenerVideoId = null;
@@ -1153,6 +1339,7 @@ class PartyPanelBuilder {
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
                 appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
+                listenerReconnectBanner = null; pendingSync = null; listenerPingLbl = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 mc.closeTabForced("party");
                 showLanding();
@@ -1165,6 +1352,7 @@ class PartyPanelBuilder {
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
                 appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
+                listenerReconnectBanner = null; pendingSync = null; listenerPingLbl = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 mc.showToast("Has sido expulsado de la sala");
                 showJoinForm();
@@ -1177,6 +1365,7 @@ class PartyPanelBuilder {
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
                 appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
+                listenerReconnectBanner = null; pendingSync = null; listenerPingLbl = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 mc.showToast("Has sido baneado de esta sala");
                 showLanding();
@@ -1199,6 +1388,7 @@ class PartyPanelBuilder {
                 listenerTrackLbl = null; listenerSyncLbl = null;
                 listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
                 appearanceRefresh = null; appearanceErrorLbl = null; appearanceConfirmBtn = null;
+                listenerReconnectBanner = null; pendingSync = null; listenerPingLbl = null;
                 PartyPanelBuilder.this.deletePartyDownloads();
                 showError("Desconectado: " + reason);
             }
@@ -1245,11 +1435,63 @@ class PartyPanelBuilder {
                     }
                 }
             }
-        });
+        };
+
+        PartyClient.Callbacks guarded = (PartyClient.Callbacks) java.lang.reflect.Proxy.newProxyInstance(
+            PartyClient.Callbacks.class.getClassLoader(),
+            new Class<?>[]{PartyClient.Callbacks.class},
+            (proxy, method, args) -> {
+                if (partyClient != selfHolder[0]) return null; // sesión reemplazada — se ignora
+                return method.invoke(impl, args);
+            });
+
+        PartyClient newClient = new PartyClient(host, port, nickname, downloadService, guarded);
+        selfHolder[0] = newClient;
+        partyClient = newClient;
+
         Runnable cleanup = this::deletePartyDownloads;
         partyCleanupHook = new Thread(cleanup, "party-cleanup");
         Runtime.getRuntime().addShutdownHook(partyCleanupHook);
         partyClient.connect();
+    }
+
+    /**
+     * Aplica un snapshot de reproducción del Master: abre el reproductor si aún no existe (caso de
+     * unión/reconexión tardía, cuando el "open" en vivo ya pasó y nunca nos llegó), y sincroniza
+     * posición, volumen, marcadores A/B y estado de pausa/reproducción para quedar exactamente
+     * igual que el Master y el resto de la sala.
+     */
+    private void applySync(PartyClient.SyncState sync) {
+        String videoId = sync.videoId();
+        if (videoId == null) return;
+        Song song = pendingSongs.get(videoId);
+        if (song == null) return; // aún descargando — se reintentará desde onTrackReady
+
+        PlayerInstance pi = partyPlayers.get(videoId);
+        if (pi == null) {
+            if (sync.hidden()) hiddenListenerTracks.add(videoId); else hiddenListenerTracks.remove(videoId);
+            currentListenerVideoId = videoId;
+            pi = mc.partyLoadSong(song, sync.hidden());
+            partyPlayers.put(videoId, pi);
+        }
+        if (pi.mediaPlayer == null) return;
+
+        pi.volume = sync.volume();
+        if (pi.fadeOutAnim == null) pi.mediaPlayer.setVolume(sync.volume());
+        pi.looping = sync.looping();
+        pi.loopMarkersActive = sync.loopActive();
+        pi.loopInPct  = sync.loopInPct();
+        pi.loopOutPct = sync.loopOutPct();
+        if (pi.spectroRedraw != null) pi.spectroRedraw.run();
+
+        pi.mediaPlayer.seek(javafx.util.Duration.millis(sync.positionMs()));
+        if (sync.playing()) {
+            mc.partyPlay(pi);
+            if (listenerSyncLbl != null) listenerSyncLbl.setText("▶ Reproduciendo");
+        } else {
+            mc.partyPause(pi, sync.positionMs());
+            if (listenerSyncLbl != null) listenerSyncLbl.setText("⏸ Pausado");
+        }
     }
 
     private void showListenerPanel() {
@@ -1261,6 +1503,22 @@ class PartyPanelBuilder {
         Label connLbl = new Label(" Conectado");
         connLbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.CHECK_CIRCLE, BoxiconsRegular.CHECK_CIRCLE, 14));
         connLbl.getStyleClass().add("greeting-sub");
+
+        listenerPingLbl = new Label();
+        listenerPingLbl.getStyleClass().add("greeting-sub");
+
+        HBox connRow = new HBox(10, connLbl, listenerPingLbl);
+        connRow.setAlignment(Pos.CENTER_LEFT);
+
+        listenerReconnectBanner = new Label(" Conexión perdida — reconectando…");
+        FontIcon reconnectBannerIcon = new FontIcon(BoxiconsRegular.REFRESH);
+        reconnectBannerIcon.setIconSize(13); reconnectBannerIcon.setIconColor(javafx.scene.paint.Color.web("#fdcb6e"));
+        listenerReconnectBanner.setGraphic(reconnectBannerIcon);
+        listenerReconnectBanner.setStyle(
+            "-fx-font-size: 11px; -fx-text-fill: #fdcb6e; -fx-background-color: rgba(253,203,110,0.12);" +
+            "-fx-background-radius: 6; -fx-padding: 4 8;");
+        listenerReconnectBanner.setMaxWidth(Double.MAX_VALUE);
+        listenerReconnectBanner.setVisible(false); listenerReconnectBanner.setManaged(false);
 
         // ── Miembros ──────────────────────────────────────────────────────────
         Label membersHeader = new Label("MIEMBROS");
@@ -1381,12 +1639,13 @@ class PartyPanelBuilder {
             knownSongs.clear(); pendingRefVideoId = null; pendingRefTitle = null;
             listenerTrackLbl = null; listenerSyncLbl = null;
             listenerMemberListBox = null; listenerChatBox = null; listenerChatScrollPane = null;
+            listenerReconnectBanner = null; pendingSync = null; listenerPingLbl = null;
             deletePartyDownloads();
             showLanding();
         });
 
         VBox inner = new VBox(10,
-            titleLbl, connLbl,
+            titleLbl, connRow, listenerReconnectBanner,
             new Separator(), membersHeader, listenerMemberListBox,
             new Separator(), syncHeader, listenerSyncLbl,
             new Separator(), chatHeader, listenerChatScrollPane,
@@ -1629,6 +1888,10 @@ class PartyPanelBuilder {
 
     void masterBroadcastLoop(String videoId, boolean looping) {
         if (partyServer != null) partyServer.broadcastLoop(videoId, looping);
+    }
+
+    void masterBroadcastLoopMarkers(String videoId, double inPct, double outPct, boolean active) {
+        if (partyServer != null) partyServer.broadcastLoopMarkers(videoId, inPct, outPct, active);
     }
 
     void masterBroadcastCloseTrack(String videoId) {

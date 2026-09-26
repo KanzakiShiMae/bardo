@@ -86,6 +86,8 @@ public class PlayerInstance {
     public boolean startPaused          = false;
     public boolean isHiddenPartyTrack   = false;
     public java.util.function.LongConsumer onPartySeek = null;
+    /** Master: se llama cuando sueltan un marcador A/B arrastrado, para difundirlo a los listeners. */
+    public Runnable onPartyMarkersChanged = null;
 
     // ── Mashup pairing ─────────────────────────────────────────────────────────
     /** For Mashup players: the paired secondary player. Null for normal players. */

@@ -19,8 +19,16 @@ class PartyClient {
 
     record MemberInfo(String name, String emoji, String color) {}
 
+    /** Snapshot de reproducción del Master, para ponerse al día tras unirse o reconectar. */
+    record SyncState(String videoId, boolean hidden, boolean playing, long positionMs, double volume,
+                      boolean looping, boolean loopActive, double loopInPct, double loopOutPct) {}
+
     interface Callbacks {
         void onConnected();
+        /** La conexión se perdió inesperadamente; el cliente reintentará solo, sin salir de la sala. */
+        void onConnectionLost(String reason);
+        /** Reconectado y apariencia restaurada tras una pérdida de conexión — listo para resincronizar. */
+        void onReconnected();
         void onTakenUpdate(java.util.Set<String> emojis, java.util.Set<String> colors);
         void onAppearanceAccepted();
         void onAppearanceRejected(String reason);
@@ -33,6 +41,10 @@ class PartyClient {
         void onSeek(String videoId, long positionMs);
         void onVolume(String videoId, double volume);
         void onLoop(String videoId, boolean looping);
+        void onLoopMarkers(String videoId, double inPct, double outPct, boolean active);
+        void onSync(SyncState sync);
+        /** Una canción concreta falló al descargarse (p.ej. vídeo no disponible) — no implica salir de la sala. */
+        void onTrackError(String videoId, String message);
         void onCloseTrack(String videoId);
         void onRoomClosed();
         void onRejected(String reason);
@@ -43,6 +55,9 @@ class PartyClient {
         void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle);
         void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle);
         void onMembersUpdate(java.util.List<MemberInfo> members);
+        /** Ping propio (ms de ida y vuelta contra el Master), medido cada pocos segundos. */
+        void onPing(int ms);
+        /** Fallo definitivo — no habrá más reintentos (falló la primera conexión, o motivo no recuperable). */
         void onDisconnected(String reason);
     }
 
@@ -60,6 +75,19 @@ class PartyClient {
     private Socket socket;
     private PrintWriter out;
     private volatile boolean running;
+
+    /** true una vez la primera conexión se completó con éxito al menos una vez. */
+    private volatile boolean hasEverConnected = false;
+    /** true si el usuario pidió desconectar voluntariamente (leave / cierre de la app) — no reintentar. */
+    private volatile boolean stopRequested = false;
+    /** true si el servidor nos dijo explícitamente que no volvamos (reject/kick/ban/roomClosed). */
+    private volatile boolean fatalStop = false;
+    /** true mientras se procesan los mensajes de un intento de reconexión (para no reabrir la UI de unión). */
+    private volatile boolean isReconnectAttempt = false;
+
+    private static final long RECONNECT_DELAY_MS = 3_000;
+    private static final long PING_INTERVAL_MS   = 4_000;
+
     PartyClient(String host, int port, String listenerName,
                 DownloadService downloadService, Callbacks callbacks) {
         this.host = host;
@@ -70,8 +98,37 @@ class PartyClient {
     }
 
     void connect() {
+        Thread t = new Thread(this::connectionLoop, "party-listener");
+        t.setDaemon(true);
+        t.start();
+        startPingLoop();
+    }
+
+    /** Envía un "ping" cada {@link #PING_INTERVAL_MS} mientras haya conexión activa; sigue vivo
+     *  a través de reconexiones (se limita a no enviar nada mientras {@code running} sea falso). */
+    private void startPingLoop() {
         Thread t = new Thread(() -> {
-            boolean everConnected = false;
+            while (!stopRequested) {
+                try { Thread.sleep(PING_INTERVAL_MS); }
+                catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+                if (running) send("ping", j -> j.addProperty("ts", System.currentTimeMillis()));
+            }
+        }, "party-ping");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Conecta y, si la conexión se cae de forma inesperada después de haber funcionado, reintenta
+     * solo (sin sacar al usuario de la sala) hasta conseguirlo o hasta que {@link #disconnect()} lo
+     * pare. Una reconexión con avatar/color ya elegidos los vuelve a reclamar automáticamente en
+     * vez de mostrar otra vez la pantalla de "elige tu apariencia".
+     */
+    private void connectionLoop() {
+        while (!stopRequested) {
+            boolean reclaimingAppearance = hasEverConnected && emoji != null && color != null;
+            isReconnectAttempt = reclaimingAppearance;
+
             try {
                 socket = new Socket();
                 socket.connect(new java.net.InetSocketAddress(host, port), 10_000);
@@ -79,29 +136,42 @@ class PartyClient {
                 out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream(), java.nio.charset.StandardCharsets.UTF_8), true);
 
                 send("hello", j -> j.addProperty("name", listenerName));
-                everConnected = true;
+                if (reclaimingAppearance) {
+                    String e = emoji, c = color;
+                    send("chooseAppearance", j -> { j.addProperty("emoji", e); j.addProperty("color", c); });
+                }
+                hasEverConnected = true;
 
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
                 String line;
                 while (running && (line = in.readLine()) != null) handleMessage(line);
 
-            } catch (IOException e) {
-                // Notify only on real failure: either mid-session drop (running=true)
-                // or initial connect failure (everConnected=false).
-                // Skip if user called disconnect() intentionally (running=false, everConnected=true).
-                if (running || !everConnected) {
-                    String reason = e.getMessage() != null ? e.getMessage() : "No se pudo conectar al servidor";
-                    Platform.runLater(() -> callbacks.onDisconnected(reason));
-                }
+            } catch (IOException ignored) {
+                // se decide qué hacer más abajo, fuera del try — puede ser un intento de reconexión
             } finally {
                 close();
             }
-        }, "party-listener");
-        t.setDaemon(true);
-        t.start();
+
+            if (stopRequested || fatalStop) return;
+
+            if (!hasEverConnected) {
+                // Nunca llegó a conectar ni una vez (código/host inválido, servidor caído) — no reintentar.
+                String reason = "No se pudo conectar al servidor";
+                Platform.runLater(() -> callbacks.onDisconnected(reason));
+                return;
+            }
+
+            // Hubo una sesión funcionando y se cayó inesperadamente: se avisa y se reintenta solo.
+            running = false;
+            Platform.runLater(() -> callbacks.onConnectionLost("Conexión perdida — reintentando…"));
+            try { Thread.sleep(RECONNECT_DELAY_MS); }
+            catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
+        }
     }
 
     void disconnect() {
+        stopRequested = true;
+        send("leave", null); // best-effort: si no hay conexión, send() no hace nada
         running = false;
         close();
     }
@@ -139,8 +209,8 @@ class PartyClient {
         try {
             JsonObject msg = gson.fromJson(json, JsonObject.class);
             switch (msg.get("type").getAsString()) {
-                case "welcome" -> Platform.runLater(callbacks::onConnected);
-                case "reject"  -> { running = false; String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onRejected(r)); }
+                case "welcome" -> { if (!isReconnectAttempt) Platform.runLater(callbacks::onConnected); }
+                case "reject"  -> { running = false; fatalStop = true; String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onRejected(r)); }
                 case "taken" -> {
                     java.util.Set<String> emojis = new java.util.LinkedHashSet<>();
                     for (com.google.gson.JsonElement el : msg.getAsJsonArray("emojis")) emojis.add(el.getAsString());
@@ -148,7 +218,10 @@ class PartyClient {
                     for (com.google.gson.JsonElement el : msg.getAsJsonArray("colors")) colors.add(el.getAsString());
                     Platform.runLater(() -> callbacks.onTakenUpdate(emojis, colors));
                 }
-                case "appearanceAccepted" -> Platform.runLater(callbacks::onAppearanceAccepted);
+                case "appearanceAccepted" -> {
+                    if (isReconnectAttempt) { isReconnectAttempt = false; Platform.runLater(callbacks::onReconnected); }
+                    else Platform.runLater(callbacks::onAppearanceAccepted);
+                }
                 case "appearanceRejected" -> { String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onAppearanceRejected(r)); }
                 case "track"  -> handleTrack(msg);
                 case "open"   -> { String vid = msg.get("videoId").getAsString(); boolean hid = msg.has("hidden") && msg.get("hidden").getAsBoolean(); Platform.runLater(() -> callbacks.onOpen(vid, hid)); }
@@ -157,10 +230,33 @@ class PartyClient {
                 case "seek"   -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onSeek(vid, p)); }
                 case "volume" -> { String vid = msg.get("videoId").getAsString(); double v = msg.get("volume").getAsDouble(); Platform.runLater(() -> callbacks.onVolume(vid, v)); }
                 case "loop"       -> { String vid = msg.get("videoId").getAsString(); boolean l = msg.get("looping").getAsBoolean(); Platform.runLater(() -> callbacks.onLoop(vid, l)); }
+                case "loopMarkers" -> {
+                    String vid = msg.get("videoId").getAsString();
+                    double inPct = msg.get("inPct").getAsDouble();
+                    double outPct = msg.get("outPct").getAsDouble();
+                    boolean active = msg.get("active").getAsBoolean();
+                    Platform.runLater(() -> callbacks.onLoopMarkers(vid, inPct, outPct, active));
+                }
+                case "sync" -> {
+                    com.google.gson.JsonElement vidEl = msg.get("videoId");
+                    if (vidEl != null && !vidEl.isJsonNull()) {
+                        String vid = vidEl.getAsString();
+                        boolean hidden = msg.has("hidden") && msg.get("hidden").getAsBoolean();
+                        boolean playing = msg.has("playing") && msg.get("playing").getAsBoolean();
+                        long pos = msg.has("positionMs") ? msg.get("positionMs").getAsLong() : 0L;
+                        double vol = msg.has("volume") ? msg.get("volume").getAsDouble() : 1.0;
+                        boolean looping = msg.has("looping") && msg.get("looping").getAsBoolean();
+                        boolean loopActive = msg.has("loopActive") && msg.get("loopActive").getAsBoolean();
+                        double loopIn = msg.has("loopInPct") ? msg.get("loopInPct").getAsDouble() : 0.0;
+                        double loopOut = msg.has("loopOutPct") ? msg.get("loopOutPct").getAsDouble() : 100.0;
+                        SyncState sync = new SyncState(vid, hidden, playing, pos, vol, looping, loopActive, loopIn, loopOut);
+                        Platform.runLater(() -> callbacks.onSync(sync));
+                    }
+                }
                 case "closeTrack"  -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onCloseTrack(vid)); }
-                case "roomClosed"  -> { running = false; Platform.runLater(() -> callbacks.onRoomClosed()); }
-                case "kick"        -> { running = false; Platform.runLater(() -> callbacks.onKicked()); }
-                case "ban"         -> { running = false; Platform.runLater(() -> callbacks.onBanned()); }
+                case "roomClosed"  -> { running = false; fatalStop = true; Platform.runLater(() -> callbacks.onRoomClosed()); }
+                case "kick"        -> { running = false; fatalStop = true; Platform.runLater(() -> callbacks.onKicked()); }
+                case "ban"         -> { running = false; fatalStop = true; Platform.runLater(() -> callbacks.onBanned()); }
                 case "redownload"  -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onRedownload(vid)); }
                 case "removeTrack" -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onRemoveTrack(vid)); }
                 case "chat" -> {
@@ -188,6 +284,12 @@ class PartyClient {
                         list.add(new MemberInfo(mo.get("name").getAsString(), mo.get("emoji").getAsString(), c));
                     }
                     Platform.runLater(() -> callbacks.onMembersUpdate(list));
+                }
+                case "pong" -> {
+                    long ts = msg.get("ts").getAsLong();
+                    int rtt = (int) Math.max(0, System.currentTimeMillis() - ts);
+                    Platform.runLater(() -> callbacks.onPing(rtt));
+                    send("pingReport", j -> j.addProperty("ms", rtt));
                 }
             }
         } catch (Exception ignored) {}
@@ -220,8 +322,11 @@ class PartyClient {
                 Platform.runLater(() -> callbacks.onTrackReady(song, path));
             })
             .exceptionally(ex -> {
+                // Fallo al descargar ESTA canción (vídeo no disponible, error de red puntual…) —
+                // se notifica al Master y se muestra al propio listener, pero NO se sale de la sala:
+                // el resto de canciones y la conexión siguen funcionando con normalidad.
                 send("error", j -> { j.addProperty("message", ex.getMessage()); j.addProperty("videoId", videoId); });
-                Platform.runLater(() -> callbacks.onDisconnected("Error al descargar: " + ex.getMessage()));
+                Platform.runLater(() -> callbacks.onTrackError(videoId, ex.getMessage()));
                 return null;
             });
     }

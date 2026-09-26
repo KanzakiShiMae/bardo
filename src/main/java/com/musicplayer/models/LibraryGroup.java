@@ -31,6 +31,10 @@ public class LibraryGroup {
     private final StringProperty type = new SimpleStringProperty("Música");
     private final ObservableList<Song> songs = FXCollections.observableArrayList();
     private int playCount = 0;
+    /** URL original de importación vía yt-dlp (modo "Introduce URL", sin YouTube Data API).
+     *  Null si el grupo se importó por búsqueda/API normal. Si no es null, refrescar esta
+     *  playlist puede volver a usar yt-dlp en vez de la API — ver YtDlpMetadataService. */
+    private final StringProperty sourceUrl = new SimpleStringProperty(null);
 
     public static LibraryGroup createCustom(String name) {
         return new LibraryGroup(UUID.randomUUID().toString(), name, null, false, null, "");
@@ -65,6 +69,8 @@ public class LibraryGroup {
     public String getYoutubePlaylistId() { return youtubePlaylistId.get(); }
     public String getDescription() { return description.get(); }
     public ObservableList<Song> getSongs() { return songs; }
+    public String getSourceUrl() { return sourceUrl.get(); }
+    public void setSourceUrl(String url) { sourceUrl.set(url); }
 
     public String getType()         { return type.get(); }
     public StringProperty typeProperty() { return type; }

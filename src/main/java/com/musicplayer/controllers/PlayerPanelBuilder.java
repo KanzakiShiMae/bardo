@@ -142,7 +142,11 @@ public final class PlayerPanelBuilder {
             e.consume();
         });
         progressStack.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_RELEASED, e -> {
-            if (drag[0] != 0) { drag[0] = 0; e.consume(); }
+            if (drag[0] != 0) {
+                drag[0] = 0;
+                if (pi.onPartyMarkersChanged != null) pi.onPartyMarkersChanged.run();
+                e.consume();
+            }
         });
 
         HBox timeRow = new HBox(14, panelElapsed, progressStack, panelTotal);
