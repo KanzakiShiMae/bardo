@@ -3,6 +3,8 @@ package com.musicplayer.services;
 import com.musicplayer.models.LibraryGroup;
 import com.musicplayer.models.Song;
 import javafx.animation.PauseTransition;
+import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
@@ -41,6 +43,12 @@ public class LibraryService {
     private final ObservableList<Song>         pinnedSongs = FXCollections.observableArrayList();
     private final PersistenceService persistence = new PersistenceService();
     private PauseTransition savePause;
+
+    /** Diseño visual de Biblioteca/playlists: {@code true} = tarjetas grandes con portada
+     *  (moderno), {@code false} = filas compactas (clásico/legacy). Cambiarlo se refleja
+     *  al instante en cualquier panel de Biblioteca o de detalle de playlist ya abierto
+     *  (ver el listener en {@code MainController.initialize}). */
+    private final BooleanProperty modernLibraryDesign = new SimpleBooleanProperty(persistence.loadModernLibraryDesign());
 
     private LibraryService() {
         persistence.load().forEach(g -> { groups.add(g); watchGroup(g); });
@@ -102,6 +110,13 @@ public class LibraryService {
     public void saveDynamicColorsEnabled(boolean enabled)       { persistence.saveDynamicColorsEnabled(enabled); }
     public boolean loadTextContrastEnabled()                    { return persistence.loadTextContrastEnabled(); }
     public void saveTextContrastEnabled(boolean enabled)        { persistence.saveTextContrastEnabled(enabled); }
+
+    public BooleanProperty modernLibraryDesignProperty() { return modernLibraryDesign; }
+    public boolean isModernLibraryDesign()               { return modernLibraryDesign.get(); }
+    public void setModernLibraryDesign(boolean enabled) {
+        modernLibraryDesign.set(enabled);
+        persistence.saveModernLibraryDesign(enabled);
+    }
     public String loadAudioDir()                                { return persistence.loadAudioDir(); }
     public void saveAudioDir(String path)                       { persistence.saveAudioDir(path); }
     public List<String> loadAudioDirHistory()                   { return persistence.loadAudioDirHistory(); }
@@ -118,5 +133,11 @@ public class LibraryService {
 
     private void watchGroup(LibraryGroup group) {
         group.getSongs().addListener((ListChangeListener<Song>) c -> debouncedSave());
+        // Sin estos dos, el icono/banner personalizado (GroupDetailBuilder.pickAndStoreImage)
+        // solo cambiaba en memoria — nunca disparaba una escritura a disco por sí solo, así que
+        // se perdía al reiniciar la app salvo que alguna otra acción (añadir una canción, etc.)
+        // disparase un guardado por casualidad.
+        group.customIconUrlProperty().addListener((o, ov, nv) -> debouncedSave());
+        group.customBannerUrlProperty().addListener((o, ov, nv) -> debouncedSave());
     }
 }

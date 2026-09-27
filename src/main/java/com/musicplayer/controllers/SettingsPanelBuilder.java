@@ -358,6 +358,15 @@ public final class SettingsPanelBuilder {
             themeManager.applyTheme();
         });
 
+        CheckBox modernDesignCheck = new CheckBox("Diseño moderno de playlists");
+        modernDesignCheck.setSelected(libraryService.isModernLibraryDesign());
+        modernDesignCheck.getStyleClass().add("greeting-sub");
+        Label modernDesignDesc = new Label(
+            "Tarjetas grandes con portada en Biblioteca y una cabecera destacada al entrar en una " +
+            "playlist. Desactívalo para volver al diseño clásico en forma de lista.");
+        modernDesignDesc.setWrapText(true); modernDesignDesc.getStyleClass().add("greeting-sub");
+        modernDesignCheck.setOnAction(e -> libraryService.setModernLibraryDesign(modernDesignCheck.isSelected()));
+
         VBox colorRows = new VBox(10);
         colorRows.setPadding(new Insets(4, 0, 4, 0));
 
@@ -443,6 +452,7 @@ public final class SettingsPanelBuilder {
 
         VBox appearanceSection = new VBox(8, appearanceSectionLbl, appearanceDesc,
             dynColorsCheck, dynColorsDesc, textContrastCheck, textContrastDesc,
+            modernDesignCheck, modernDesignDesc,
             colorRows, resetThemeBtn);
 
         Separator appearanceSep = new Separator(); appearanceSep.setPadding(new Insets(8, 0, 8, 0));

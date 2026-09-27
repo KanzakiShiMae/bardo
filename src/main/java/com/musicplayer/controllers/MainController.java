@@ -22,6 +22,7 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
@@ -142,6 +143,7 @@ public class MainController implements Initializable {
     @FXML private ProgressIndicator searchSpinner;
 
     @FXML private VBox libraryGroupsContainer;
+    @FXML private FlowPane libraryGroupsGrid;
 
     @FXML private HBox      nowPlayingBar;
     @FXML private ImageView albumArt;
@@ -191,6 +193,10 @@ public class MainController implements Initializable {
     private PlayerInstance focusedPlayer;
     private PartyPanelBuilder partyPanelBuilder;
 
+    /** Pestañas de detalle de playlist abiertas (tabId "col:&lt;groupId&gt;" -> grupo), para poder
+     *  redibujarlas in situ cuando cambia el ajuste de diseño moderno/clásico en caliente. */
+    private final Map<String, LibraryGroup> openGroupDetailTabs = new HashMap<>();
+
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
 
@@ -235,6 +241,13 @@ public class MainController implements Initializable {
         appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
 
         libraryService = LibraryService.getInstance();
+        libraryService.modernLibraryDesignProperty().addListener((obs, was, is) -> {
+            refreshLibraryPanel();
+            openGroupDetailTabs.forEach((tabId, g) -> {
+                AppTab t = findTab(tabId);
+                if (t != null) renderGroupDetail(t.panel, g);
+            });
+        });
         spectrogramService = new SpectrogramService();
         themeManager = new ThemeManager(libraryService, () -> focusedPlayer, activePlayers,
             sidebar, tabBarScroll, nowPlayingBar, contentArea);
@@ -305,9 +318,8 @@ public class MainController implements Initializable {
             // Attach resize helper and store stage reference once the window is known
             scene.windowProperty().addListener((obs2, old2, win) -> {
                 if (win instanceof javafx.stage.Stage st) {
-                    resizeHelper = ResizeHelper.attach(st, scene);
+                    resizeHelper = ResizeHelper.attach(st, scene, () -> fakeFullScreen);
                     syncMaximizeIcon(st);
-                    st.maximizedProperty().addListener((o, wasMax, isMax) -> syncMaximizeIcon(st));
                 }
             });
         });
@@ -419,14 +431,13 @@ public class MainController implements Initializable {
         });
 
         btnMinimize.setOnAction(e -> stage().setIconified(true));
-        btnMaximize.setOnAction(e -> {
-            javafx.stage.Stage st = stage();
-            if (fakeFullScreen) {
-                setFakeFullScreen(st, false);
-            } else {
-                st.setMaximized(!st.isMaximized());
-            }
-        });
+        // Nunca se usa Stage.setMaximized(true) real: en ventanas UNDECORATED, Windows/JavaFX
+        // tiene un bug conocido donde restaurar desde el maximizado nativo deja el Stage con
+        // bounds incorrectos (la ventana queda más ancha/alta que la pantalla y sus bordes
+        // quedan fuera del área visible — "los extremos desaparecen"). setFakeFullScreen ya
+        // implementa un maximizado manual fiable (bounds copiados de Screen.getVisualBounds())
+        // que además usan el snap-to-top y F11; unificar aquí evita el bug por completo.
+        btnMaximize.setOnAction(e -> setFakeFullScreen(stage(), !fakeFullScreen));
     }
 
     private void closeApp() {
@@ -445,8 +456,7 @@ public class MainController implements Initializable {
     /** Sincroniza el icono del botón maximizar con el estado actual de la ventana. */
     private void syncMaximizeIcon(javafx.stage.Stage st) {
         Platform.runLater(() -> {
-            boolean maximized = st.isMaximized() || fakeFullScreen;
-            ico(btnMaximize, maximized ? BoxiconsRegular.EXIT_FULLSCREEN : BoxiconsRegular.EXPAND, 13, false);
+            ico(btnMaximize, fakeFullScreen ? BoxiconsRegular.EXIT_FULLSCREEN : BoxiconsRegular.EXPAND, 13, false);
             btnMaximize.setText("");
         });
     }
@@ -455,7 +465,7 @@ public class MainController implements Initializable {
         titleBar.setOnMousePressed(e -> {
             titleBarDragging = false;
             if (resizeHelper != null && resizeHelper.isActive()) return;
-            if (stage().isMaximized() || fakeFullScreen) return;
+            if (fakeFullScreen) return;
             windowX = e.getSceneX(); windowY = e.getSceneY();
         });
         titleBar.setOnMouseDragged(e -> {
@@ -474,12 +484,6 @@ public class MainController implements Initializable {
                 } else {
                     return;
                 }
-            }
-            if (st.isMaximized()) {
-                double ratio = e.getScreenX() / st.getWidth();
-                st.setMaximized(false);
-                windowX = st.getWidth() * ratio;
-                windowY = e.getSceneY();
             }
             st.setX(e.getScreenX() - windowX);
             st.setY(e.getScreenY() - windowY);
@@ -581,10 +585,13 @@ public class MainController implements Initializable {
         btnParty.setOnAction(e -> openTab("party", BoxiconsRegular.HEADPHONE, "Party", partyPanelBuilder.getPanel(), true, btnParty));
 
         // ── DEBUG: abre dos ventanas de Party (master + listener) ─────────────
+        // Oculto de la UI (no se añade a la barra de título) pero sin borrar — reactivar
+        // añadiendo `debugPartyBtn` de vuelta a `titleBar.getChildren()` cuando haga falta probar.
         Button debugPartyBtn = new Button("DEBUG Party");
         debugPartyBtn.setStyle("-fx-background-color:#c0392b;-fx-text-fill:white;-fx-font-size:10px;-fx-padding:2 8;-fx-background-radius:4;");
         debugPartyBtn.setOnAction(e -> openDebugPartyTabs());
-        titleBar.getChildren().add(titleBar.getChildren().size() - 1, debugPartyBtn);
+        debugPartyBtn.setVisible(false);
+        debugPartyBtn.setManaged(false);
 
         libraryService.getGroups().addListener(
             (javafx.collections.ListChangeListener<LibraryGroup>) c -> refreshSidebarList()
@@ -661,6 +668,7 @@ public class MainController implements Initializable {
         int idx = openTabs.indexOf(tab);
         openTabs.remove(tab);
         contentArea.getChildren().remove(tab.panel);
+        if (id.startsWith("col:")) openGroupDetailTabs.remove(id);
 
         if (id.startsWith("player:") || id.startsWith("mashup:")) {
             PlayerInstance pi = findPlayerInstance(id);
@@ -1849,24 +1857,33 @@ public class MainController implements Initializable {
     }
 
     private void refreshLibraryPanel() {
+        boolean modern = libraryService.isModernLibraryDesign();
+        libraryGroupsContainer.setVisible(!modern);  libraryGroupsContainer.setManaged(!modern);
+        libraryGroupsGrid.setVisible(modern);         libraryGroupsGrid.setManaged(modern);
+        // Solo se rellena el contenedor activo — el otro se limpia para no mantener en memoria
+        // ImageViews/tarjetas del diseño que no se está usando.
         libraryGroupsContainer.getChildren().clear();
+        libraryGroupsGrid.getChildren().clear();
+        Pane target = modern ? libraryGroupsGrid : libraryGroupsContainer;
+
         if (libraryService.getGroups().isEmpty()) {
             Label empty = new Label("Aún no tienes colecciones.\nUsa «Nueva colección» para empezar.");
             empty.getStyleClass().add("empty-library-hint"); empty.setWrapText(true);
-            libraryGroupsContainer.getChildren().add(empty); return;
+            target.getChildren().add(empty); return;
         }
         libraryService.getGroups().forEach(g ->
-            libraryGroupsContainer.getChildren().add(GroupDetailBuilder.groupSection(g,
+            target.getChildren().add(GroupDetailBuilder.groupCard(g,
                 () -> { libraryService.removeGroup(g); refreshLibraryPanel(); refreshSidebarList(); },
                 btn -> refreshYouTubePlaylist(g, btn),
-                () -> showGroupDetail(g)))
+                () -> showGroupDetail(g), modern))
         );
     }
 
-    private void showGroupDetail(LibraryGroup group) {
-        String tabId = "col:" + group.getId();
-        AppTab existing = findTab(tabId); if (existing != null) { activateTab(existing); return; }
-        VBox panel = GroupDetailBuilder.detailPanel(group,
+    /** Construye/reconstruye el contenido del panel de detalle de {@code group} dentro de
+     *  {@code panel} (mismo nodo, para no perder la identidad de la pestaña). Se usa tanto al
+     *  abrir la pestaña por primera vez como al cambiar en caliente el diseño moderno/clásico. */
+    private void renderGroupDetail(VBox panel, LibraryGroup group) {
+        GroupDetailBuilder.populateDetailPanel(panel, group,
             () -> { refreshLibraryPanel(); openTab("library", BoxiconsRegular.LIBRARY, "Biblioteca", libraryPanel, true, btnLibrary); },
             () -> { List<Song> loc = group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
                     if (!loc.isEmpty()) playSongInQueue(loc.get(0), loc); else showToast("Sin archivos locales"); },
@@ -1878,9 +1895,18 @@ public class MainController implements Initializable {
             (song, grp) -> openSongPaused(song, grp),
             songs -> openMashupPlayer(songs.get(0), songs.get(1)),
             libraryService, this::showToast, this::refreshHomePanel,
-            partyPanelBuilder.isMasterProperty(), partyPanelBuilder::addSongToParty);
-        openTab(tabId, group.isYoutubePlaylist() ? BoxiconsSolid.TV : BoxiconsRegular.LIST_UL, group.getName(), panel, true, btnLibrary);
+            partyPanelBuilder.isMasterProperty(), partyPanelBuilder::addSongToParty,
+            libraryService.isModernLibraryDesign());
         themeManager.applyContrastStroke(panel, "bardo-text", "bardo-bg");
+    }
+
+    private void showGroupDetail(LibraryGroup group) {
+        String tabId = "col:" + group.getId();
+        AppTab existing = findTab(tabId); if (existing != null) { activateTab(existing); return; }
+        VBox panel = new VBox(0); panel.getStyleClass().add("panel"); panel.setPadding(Insets.EMPTY);
+        renderGroupDetail(panel, group);
+        openGroupDetailTabs.put(tabId, group);
+        openTab(tabId, group.isYoutubePlaylist() ? BoxiconsSolid.TV : BoxiconsRegular.LIST_UL, group.getName(), panel, true, btnLibrary);
     }
 
     private void openMashupPlayer(Song songA, Song songB) {

@@ -5,6 +5,8 @@ import javafx.scene.Scene;
 import javafx.scene.input.MouseEvent;
 import javafx.stage.Stage;
 
+import java.util.function.BooleanSupplier;
+
 /**
  * Añade redimensionado por ratón a una ventana {@code UNDECORATED}.
  *
@@ -32,15 +34,18 @@ public final class ResizeHelper {
     /**
      * Adjunta los filtros de redimensionado a la escena y devuelve la instancia.
      *
-     * @param stage escena propietaria del stage
-     * @param scene escena sobre la que se registran los filtros
+     * @param stage    escena propietaria del stage
+     * @param scene    escena sobre la que se registran los filtros
+     * @param extraLock desactiva el redimensionado mientras devuelva {@code true} (p. ej. el
+     *                  "fake fullscreen" manual de {@code MainController}, que no pasa por
+     *                  {@link Stage#isMaximized()} real)
      * @return instancia activa consultable con {@link #isActive()}
      */
-    public static ResizeHelper attach(Stage stage, Scene scene) {
+    public static ResizeHelper attach(Stage stage, Scene scene, BooleanSupplier extraLock) {
         ResizeHelper r = new ResizeHelper();
 
         scene.addEventFilter(MouseEvent.MOUSE_MOVED, e -> {
-            if (stage.isMaximized() || stage.isFullScreen()) {
+            if (stage.isMaximized() || stage.isFullScreen() || extraLock.getAsBoolean()) {
                 scene.setCursor(Cursor.DEFAULT);
                 r.dir = Dir.NONE;
                 return;

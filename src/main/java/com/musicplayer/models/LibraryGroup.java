@@ -35,6 +35,11 @@ public class LibraryGroup {
      *  Null si el grupo se importó por búsqueda/API normal. Si no es null, refrescar esta
      *  playlist puede volver a usar yt-dlp en vez de la API — ver YtDlpMetadataService. */
     private final StringProperty sourceUrl = new SimpleStringProperty(null);
+    /** Icono/banner elegidos manualmente por el usuario (URI {@code file:} de una copia local
+     *  en {@code covers/}, ver {@code GroupDetailBuilder}). Si uno de los dos es null, la UI usa
+     *  el otro como sustituto antes de caer al thumbnail de YouTube o a un icono genérico. */
+    private final StringProperty customIconUrl   = new SimpleStringProperty(null);
+    private final StringProperty customBannerUrl = new SimpleStringProperty(null);
 
     public static LibraryGroup createCustom(String name) {
         return new LibraryGroup(UUID.randomUUID().toString(), name, null, false, null, "");
@@ -71,6 +76,19 @@ public class LibraryGroup {
     public ObservableList<Song> getSongs() { return songs; }
     public String getSourceUrl() { return sourceUrl.get(); }
     public void setSourceUrl(String url) { sourceUrl.set(url); }
+
+    public String getCustomIconUrl() { return customIconUrl.get(); }
+    /** El archivo de icono tiene siempre el mismo nombre por grupo (se sobrescribe al elegir
+     *  uno nuevo) — así que "reemplazar" el icono a menudo pasa la MISMA URI que ya tenía, y
+     *  una {@code Property} de JavaFX no dispara sus listeners cuando el valor nuevo es igual al
+     *  anterior (verificado). Se fuerza pasando por {@code null} primero para que la UI se
+     *  entere siempre de que hay una imagen nueva, aunque la ruta no haya cambiado. */
+    public void setCustomIconUrl(String url) { customIconUrl.set(null); customIconUrl.set(url); }
+    public StringProperty customIconUrlProperty() { return customIconUrl; }
+    public String getCustomBannerUrl() { return customBannerUrl.get(); }
+    /** Ver {@link #setCustomIconUrl(String)} — mismo motivo. */
+    public void setCustomBannerUrl(String url) { customBannerUrl.set(null); customBannerUrl.set(url); }
+    public StringProperty customBannerUrlProperty() { return customBannerUrl; }
 
     public String getType()         { return type.get(); }
     public StringProperty typeProperty() { return type; }

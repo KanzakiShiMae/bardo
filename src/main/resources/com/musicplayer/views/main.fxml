@@ -124,7 +124,10 @@
                     </HBox>
 
                     <ScrollPane styleClass="results-scroll" fitToWidth="true" VBox.vgrow="ALWAYS">
-                        <VBox fx:id="libraryGroupsContainer" styleClass="library-groups" spacing="10" />
+                        <StackPane alignment="TOP_LEFT">
+                            <VBox fx:id="libraryGroupsContainer" styleClass="library-groups" spacing="10" />
+                            <FlowPane fx:id="libraryGroupsGrid" styleClass="library-groups-grid" hgap="18" vgap="18" />
+                        </StackPane>
                     </ScrollPane>
                 </VBox>
 

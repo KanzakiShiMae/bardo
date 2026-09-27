@@ -59,6 +59,7 @@ public class PersistenceService {
         Map<String, String> themeVarModes = new HashMap<>();
         boolean dynamicColorsEnabled      = true;
         boolean textContrastEnabled       = true;
+        boolean modernLibraryDesign       = true;
     }
 
     private SettingsDto loadSettingsDto() {
@@ -153,6 +154,16 @@ public class PersistenceService {
         return loadSettingsDto().textContrastEnabled;
     }
 
+    public void saveModernLibraryDesign(boolean enabled) {
+        SettingsDto dto = loadSettingsDto();
+        dto.modernLibraryDesign = enabled;
+        writeSettings(dto);
+    }
+
+    public boolean loadModernLibraryDesign() {
+        return loadSettingsDto().modernLibraryDesign;
+    }
+
     public void saveAudioDir(String path) {
         SettingsDto dto = loadSettingsDto();
         dto.audioDir = path != null ? path : "";
@@ -183,6 +194,7 @@ public class PersistenceService {
 
     private static class GroupDto {
         String  id, name, thumbnailUrl, youtubePlaylistId, description, type, sourceUrl;
+        String  customIconUrl, customBannerUrl;
         boolean youtubePlaylist;
         int     playCount = 0;
         List<SongDto> songs = new ArrayList<>();
@@ -221,6 +233,8 @@ public class PersistenceService {
             gd.type             = g.getType();
             gd.playCount        = g.getPlayCount();
             gd.sourceUrl        = g.getSourceUrl();
+            gd.customIconUrl    = g.getCustomIconUrl();
+            gd.customBannerUrl  = g.getCustomBannerUrl();
             for (Song s : g.getSongs()) {
                 SongDto sd = new SongDto();
                 sd.videoId       = s.getVideoId();
@@ -273,6 +287,8 @@ public class PersistenceService {
                 group.setType(gd.type != null ? gd.type : "Música");
                 group.setPlayCount(gd.playCount);
                 if (gd.sourceUrl != null) group.setSourceUrl(gd.sourceUrl);
+                if (gd.customIconUrl != null) group.setCustomIconUrl(gd.customIconUrl);
+                if (gd.customBannerUrl != null) group.setCustomBannerUrl(gd.customBannerUrl);
                 result.add(group);
             }
         } catch (Exception e) {
