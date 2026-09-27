@@ -1,6 +1,8 @@
 package com.musicplayer.controllers;
 
 import com.musicplayer.models.Song;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
@@ -36,8 +38,11 @@ public final class MashupPanelBuilder {
         panel.setVisible(false); panel.setManaged(false);
 
         // Header
-        Label header = new Label("♪♪  Reproductor Mashup");
+        Label header = new Label("  Reproductor Mashup");
         header.getStyleClass().add("player-full-title");
+        FontIcon headerIcon = new FontIcon(BoxiconsRegular.HEADPHONE);
+        headerIcon.setIconSize(20); headerIcon.getStyleClass().add("icon-primary");
+        header.setGraphic(headerIcon);
 
         // Two-song info row
         VBox colA = songColumn(songA, "①");
@@ -56,7 +61,8 @@ public final class MashupPanelBuilder {
         sliderA.getStyleClass().add("volume-slider"); sliderA.setPrefWidth(130);
         Label pctA = new Label(initA + "%"); pctA.getStyleClass().add("volume-pct-label"); pctA.setMinWidth(36);
 
-        Button xBtn = new Button("⇄"); xBtn.getStyleClass().add("mashup-xfade-btn");
+        Button xBtn = new Button(); xBtn.getStyleClass().add("mashup-xfade-btn");
+        MainController.ico(xBtn, BoxiconsRegular.TRANSFER_ALT, 16, false);
         xBtn.setOnAction(e -> onCrossfade.run());
 
         Label pctB = new Label(initB + "%"); pctB.getStyleClass().add("volume-pct-label"); pctB.setMinWidth(36);
@@ -83,9 +89,10 @@ public final class MashupPanelBuilder {
         volRow.setAlignment(Pos.CENTER);
 
         // Play/pause button
-        Button ppBtn = new Button("⏸");
+        Button ppBtn = new Button();
         ppBtn.getStyleClass().add("play-btn");
-        ppBtn.setStyle("-fx-min-width:64px; -fx-min-height:64px; -fx-font-size:22px;");
+        ppBtn.setStyle("-fx-min-width:64px; -fx-min-height:64px;");
+        MainController.ico(ppBtn, BoxiconsRegular.PAUSE, 24, true);
         ppBtn.setOnAction(e -> onTogglePlay.run());
 
         // Progress row

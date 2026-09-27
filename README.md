@@ -1,6 +1,6 @@
-# Bardo v0.4.0-alpha
+# Bardo v0.5.0-alpha
 
-Reproductor de música de escritorio construido con JavaFX 21. Combina biblioteca local, reproducción multicanal simultánea, integración con YouTube y un modo Mashup para mezclar dos canciones en tiempo real.
+Reproductor de música de escritorio construido con JavaFX 21. Combina biblioteca local, reproducción multicanal simultánea, integración con YouTube, un modo Mashup para mezclar dos canciones en tiempo real y Party, una sala de escucha sincronizada entre varios usuarios.
 
 ---
 
@@ -9,6 +9,7 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
 - **Biblioteca local** — importa carpetas con archivos MP3, WAV, OGG, M4A, AAC, FLAC, AIF/AIFF
 - **Búsqueda en YouTube** — busca canciones y descarga el audio automáticamente via yt-dlp
 - **Importar playlists de YouTube** — sincroniza una playlist pública completa a la biblioteca
+- **Introduce URL** — importa un vídeo o playlist directamente por su URL usando yt-dlp, sin necesidad de configurar una clave de la YouTube Data API
 - **Multi-reproductor** — reproduce varias canciones a la vez, cada una con su propia pestaña y panel
 - **Tipos de playlist**:
   - *Música* — reproducción normal
@@ -30,6 +31,11 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
 - **Carpeta de música configurable** — desde *Configuración* puedes cambiar dónde se guardan las canciones descargadas; los archivos existentes se migran automáticamente a la nueva ubicación
 - **Gestión de descargas** — pantalla "Ver descargas" con búsqueda, orden (por fecha/tamaño) y filtro por playlist; permite eliminar canciones descargadas para liberar espacio. Optimizada para bibliotecas grandes: carga los tamaños en segundo plano y usa una lista virtualizada
 - **Delimitadores de bucle (A/B)** — arrastra dos marcadores sobre la barra de progreso/espectrograma de una canción para repetir en bucle solo ese fragmento
+- **Party** — sala de escucha sincronizada: un Master aloja la sala y sus Listeners reciben en directo la canción, posición, volumen, pausa/reproducción y marcadores A/B; incluye avatares y colores propios, chat con reacciones, y un código de sala opaco para compartir. El acceso remoto (sin necesidad de abrir puertos) es opcional, vía UPnP o un túnel [bore](https://github.com/ekzhang/bore)
+- **Diseño moderno de playlists** — tanto la biblioteca como el detalle de cada playlist pueden mostrarse como una cuadrícula de tarjetas con portada grande y un banner dinámico, en vez de la lista clásica; se alterna en vivo desde *Configuración*, sin reabrir la playlist
+- **Icono y banner personalizados por playlist** — sube una imagen desde tu PC y recórtala con el diálogo integrado para usarla como icono o banner de una colección
+- **Reordenar canciones arrastrando** — tanto en la cuadrícula como en la lista clásica, con una animación de deslizamiento suave (no instantánea) para la canción movida y las que cambian de posición
+- **Actualizaciones automáticas** — Bardo comprueba en cada arranque si hay una versión más reciente en GitHub Releases (y, por separado, de yt-dlp y de bore) y ofrece descargarla e instalarla sin salir de la app
 
 ---
 
@@ -42,6 +48,8 @@ Reproductor de música de escritorio construido con JavaFX 21. Combina bibliotec
 | yt-dlp | incluido para Windows; ver nota abajo para otros SO |
 
 > **yt-dlp en Linux/macOS:** instala yt-dlp y asegúrate de que esté en el `PATH`. El binario incluido en `src/main/resources/com/musicplayer/bin/` es solo para Windows.
+
+> **Party sin abrir puertos:** el Master puede exponer la sala automáticamente vía UPnP si el router lo soporta, o usar un túnel [bore](https://github.com/ekzhang/bore) como alternativa — el binario de bore no viene incluido, se descarga la primera vez que se elige ese modo desde el panel de Party.
 
 ---
 
@@ -100,6 +108,8 @@ Al arrancar por primera vez (sin clave configurada) aparecerá un diálogo que t
 | HTTP | OkHttp 4 |
 | JSON | Gson |
 | Descarga de audio | yt-dlp |
+| Sala Party | Sockets TCP (`java.net`), UPnP IGD (weupnp), túnel opcional bore |
+| Iconos | Ikonli (Boxicons, Material Design 2) |
 | Build | Maven |
 
 ---
@@ -118,22 +128,31 @@ src/main/
 │   │   ├── PlayerInstance.java           # Estado de un reproductor activo
 │   │   ├── PlayerPanelBuilder.java       # Panel completo del reproductor
 │   │   ├── MashupPanelBuilder.java       # Panel del reproductor Mashup
-│   │   ├── GroupDetailBuilder.java       # Vista de detalle de una playlist
+│   │   ├── GroupDetailBuilder.java       # Vista de detalle de una playlist (lista clásica y cuadrícula moderna)
 │   │   ├── CardBuilder.java              # Tarjetas de inicio y búsqueda
 │   │   ├── DownloadDialogs.java          # Diálogos de descarga masiva
 │   │   ├── LoadingOverlay.java           # Overlay de carga animado en el arranque
 │   │   ├── SpectrogramPanelBuilder.java  # Renderizador de espectrograma sobre el slider
+│   │   ├── PartyPanelBuilder.java        # Panel de Party (Master y Listener)
+│   │   ├── PartyServer.java              # Servidor TCP embebido de la sala (lado Master)
+│   │   ├── PartyClient.java              # Cliente TCP que conecta a la sala (lado Listener)
+│   │   ├── RoomCode.java                 # Codifica/decodifica el código de sala compartible
+│   │   ├── UPnPHelper.java               # Apertura de puerto en el router vía UPnP IGD
+│   │   ├── UpdateChecker.java            # Comprobación y descarga de nuevas versiones (Bardo, yt-dlp, bore)
+│   │   ├── SoundPlayer.java              # Reproducción de sonidos de feedback (Party)
+│   │   ├── IkonUtil.java                 # Iconos duotono (Ikonli) reutilizados en la interfaz
 │   │   ├── AppTab.java                   # Datos de una pestaña
 │   │   ├── ResizeHelper.java             # Redimensionado de ventana UNDECORATED
 │   │   └── UIUtils.java                  # Utilidades (formato, CSS, navegador)
 │   ├── models/
 │   │   ├── Song.java                     # Canción (YouTube o local)
-│   │   ├── LibraryGroup.java             # Colección de canciones (playlist)
+│   │   ├── LibraryGroup.java             # Colección de canciones (playlist), con icono/banner personalizados
 │   │   └── YouTubePlaylistInfo.java      # Metadatos de playlist de YouTube
 │   └── services/
 │       ├── ConfigLoader.java             # Carga config.properties y app.properties
 │       ├── YouTubeService.java           # Búsqueda y playlists via YouTube API
 │       ├── YouTubeQuotaTracker.java      # Estimación y límite de cuota diaria de la API
+│       ├── YtDlpMetadataService.java     # Metadatos de vídeo/playlist vía yt-dlp (modo "Introduce URL", sin API)
 │       ├── DownloadService.java          # Descarga de audio (yt-dlp)
 │       ├── SpectrogramService.java       # Cómputo y caché de espectrogramas (TarsosDSP)
 │       ├── LibraryService.java           # Singleton de biblioteca en memoria
@@ -176,6 +195,7 @@ La biblioteca, la configuración y la caché de espectrogramas se guardan autom�
 | `quota.json` | Consumo diario de unidades de la YouTube API |
 | `audio/` | Archivos de audio descargados por grupo |
 | `spectrograms/` | Espectrogramas precalculados (formato `.spg`) |
+| `covers/` | Iconos y banners personalizados (recortados) de cada playlist |
 | `bin/yt-dlp.exe` | Binario extraído del JAR en el primer uso |
 
 Estos directorios no forman parte del repositorio.

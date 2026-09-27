@@ -1,6 +1,8 @@
 package com.musicplayer;
 
+import com.musicplayer.controllers.UpdateChecker;
 import com.musicplayer.services.ConfigLoader;
+import com.musicplayer.services.DownloadService;
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
@@ -31,6 +33,18 @@ public class App extends Application {
 
     @Override
     public void start(Stage stage) throws Exception {
+        // ServiceLoader can't find IkonHandler providers in JPMS because ikonli-javafx
+        // doesn't declare 'uses IkonHandler' — register them manually before any FontIcon is created
+        try {
+            var resolver = org.kordamp.ikonli.javafx.IkonResolver.getInstance();
+            for (org.kordamp.ikonli.IkonHandler h : new org.kordamp.ikonli.IkonHandler[]{
+                    new org.kordamp.ikonli.boxicons.BoxiconsSolidIkonHandler(),
+                    new org.kordamp.ikonli.boxicons.BoxiconsRegularIkonHandler()}) {
+                h.setFont(javafx.scene.text.Font.loadFont(h.getFontResource().openStream(), 16));
+                resolver.registerHandler(h);
+            }
+        } catch (Exception ignored) {}
+
         FXMLLoader loader = new FXMLLoader(
             getClass().getResource("/com/musicplayer/views/main.fxml")
         );
@@ -65,6 +79,10 @@ public class App extends Application {
         stage.setY(sb.getMinY() + (sb.getHeight() - initH) / 2.0);
 
         stage.show();
+
+        UpdateChecker.checkAsync(v, stage);
+        UpdateChecker.checkYtDlpAsync(stage, new DownloadService());
+        UpdateChecker.checkBoreAsync(stage);
     }
 
     public static void main(String[] args) {

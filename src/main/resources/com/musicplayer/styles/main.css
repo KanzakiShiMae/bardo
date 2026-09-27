@@ -23,6 +23,10 @@
     -fx-background-color: bardo-bg;
 }
 
+/* ── Ikonli icon color classes ────────────────── */
+.icon-primary   { -fx-icon-color: bardo-text; }
+.icon-secondary { -fx-icon-color: bardo-text-muted; }
+
 /* ── Title bar ────────────────────────────────── */
 .title-bar {
     -fx-background-color: bardo-bg;
@@ -424,6 +428,21 @@
     -fx-wrap-text: false;
 }
 .np-artist { -fx-font-size: 11px; -fx-text-fill: bardo-text-muted; }
+.now-playing-download-bar {
+    -fx-pref-height: 4px;
+    -fx-background-color: derive(bardo-sidebar-bg, -5%);
+    -fx-background-radius: 3px;
+    -fx-accent: derive(bardo-accent, -15%);
+}
+.now-playing-download-bar > .track {
+    -fx-background-color: derive(bardo-sidebar-bg, -5%);
+    -fx-background-radius: 3px;
+}
+.now-playing-download-bar > .bar {
+    -fx-background-color: linear-gradient(to right, bardo-accent, derive(bardo-accent, -15%));
+    -fx-background-radius: 3px;
+    -fx-background-insets: 0;
+}
 .np-like-btn {
     -fx-background-color: transparent;
     -fx-border-width: 0;
@@ -643,7 +662,126 @@
 }
 .add-to-lib-btn:hover { -fx-background-color: bardo-accent; -fx-text-fill: white; }
 
-/* ── Library groups ───────────────────────────── */
+/* ── Library groups (modern grid) ─────────────── */
+.library-groups-grid { -fx-background-color: transparent; -fx-padding: 4 0 4 0; }
+
+.group-card-modern {
+    -fx-background-color: bardo-bg;
+    -fx-background-radius: 18px;
+    -fx-padding: 12px;
+    -fx-pref-width: 180px;
+    -fx-cursor: hand;
+    -fx-effect: dropshadow(gaussian, rgba(150,130,170,0.12), 10, 0, 0, 3);
+}
+.group-card-modern:hover {
+    -fx-effect: dropshadow(gaussian, rgba(150,130,170,0.26), 16, 0, 0, 5);
+}
+.group-card-cover-placeholder {
+    -fx-background-color: linear-gradient(to bottom right, derive(bardo-accent, 55%), derive(bardo-accent2, 55%));
+    -fx-background-radius: 16px;
+    -fx-min-width: 168px; -fx-min-height: 168px;
+    -fx-max-width: 168px; -fx-max-height: 168px;
+}
+.group-card-modern-title {
+    -fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: bardo-text;
+}
+.group-card-modern-count {
+    -fx-font-size: 11px; -fx-text-fill: derive(bardo-text-muted, 15%);
+}
+
+/* ── Playlist detail hero (modern) ────────────── */
+.library-hero { -fx-background-color: bardo-bg; }
+.library-hero-overlay {
+    -fx-background-color: linear-gradient(to bottom, rgba(0,0,0,0.32) 0%, rgba(0,0,0,0.10) 45%, bardo-bg 100%);
+}
+.library-hero-fallback {
+    -fx-background-color: linear-gradient(to bottom right, derive(bardo-accent, -20%), derive(bardo-accent2, -20%));
+}
+.library-hero-back-btn {
+    -fx-background-color: rgba(255,255,255,0.85);
+    -fx-background-radius: 20px;
+    -fx-text-fill: derive(bardo-text, 25%);
+    -fx-font-size: 13px; -fx-padding: 6 14 6 14;
+    -fx-border-width: 0; -fx-cursor: hand;
+}
+.library-hero-back-btn:hover { -fx-background-color: white; }
+.library-hero-title {
+    -fx-font-size: 19px; -fx-font-weight: bold; -fx-text-fill: white;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.45), 6, 0.4, 0, 1);
+}
+.library-hero-sub {
+    -fx-font-size: 11px; -fx-text-fill: rgba(255,255,255,0.85);
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.45), 4, 0.4, 0, 1);
+}
+.library-hero-play-btn {
+    -fx-background-color: bardo-accent;
+    -fx-background-radius: 50%;
+    -fx-min-width: 38px; -fx-max-width: 38px;
+    -fx-min-height: 38px; -fx-max-height: 38px;
+    -fx-padding: 0; -fx-border-width: 0; -fx-cursor: hand;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.3), 8, 0.3, 0, 2);
+}
+.library-hero-play-btn:hover { -fx-background-color: derive(bardo-accent, -18%); }
+.library-hero-action-btn {
+    -fx-background-color: rgba(255,255,255,0.85);
+    -fx-background-radius: 8px;
+    -fx-border-width: 0;
+    -fx-font-size: 15px; -fx-cursor: hand; -fx-padding: 6 10 6 10; -fx-min-width: 34px;
+}
+.library-hero-action-btn:hover { -fx-background-color: white; }
+
+/* ── Diálogo de recorte de icono/banner ───────── */
+.crop-viewport {
+    -fx-background-color: #24202b;
+    -fx-border-color: derive(bardo-accent, 10%);
+    -fx-border-width: 2px;
+    -fx-background-radius: 6px;
+    -fx-border-radius: 6px;
+}
+
+/* ── Song grid card (modern, dentro de una playlist) ──── */
+.song-grid-card {
+    -fx-background-color: transparent;
+    -fx-cursor: hand;
+    -fx-padding: 0;
+}
+.song-grid-card:hover .song-grid-card-title { -fx-text-fill: derive(bardo-text, -10%); }
+.song-grid-card-placeholder {
+    -fx-background-color: linear-gradient(to bottom right, derive(bardo-accent, 55%), derive(bardo-accent2, 55%));
+    -fx-background-radius: 14px;
+}
+.song-grid-card-cover-hover {
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.35), 16, 0.15, 0, 5);
+}
+.song-grid-card-dragging {
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.45), 22, 0.2, 0, 8);
+}
+.song-grid-card-title {
+    -fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: bardo-text;
+}
+.song-grid-card-duration { -fx-font-size: 11px; -fx-text-fill: derive(bardo-text-muted, 15%); }
+.song-grid-card-pin-btn {
+    -fx-background-color: rgba(255,255,255,0.85);
+    -fx-background-radius: 50%;
+    -fx-text-fill: derive(bardo-text-muted, -5%);
+    -fx-min-width: 24px; -fx-max-width: 24px;
+    -fx-min-height: 24px; -fx-max-height: 24px;
+    -fx-padding: 0; -fx-border-width: 0; -fx-cursor: hand;
+}
+.song-grid-card-pin-btn:hover  { -fx-background-color: white; }
+.song-grid-card-pin-btn-active { -fx-text-fill: derive(bardo-accent, -18%); }
+
+/* ── Detail song row (modern) ─────────────────── */
+.detail-song-row-modern {
+    -fx-background-radius: 10px; -fx-cursor: hand; -fx-pref-height: 68px;
+    -fx-border-width: 0;
+}
+.detail-song-row-modern:hover { -fx-background-color: derive(bardo-player-bg1, -3%); }
+.detail-thumb-modern {
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.16), 6, 0, 0, 2);
+}
+
+/* ── Library groups (classic list) ────────────── */
 .library-groups { -fx-background-color: transparent; -fx-padding: 4 0 4 0; }
 .group-section {
     -fx-background-color: bardo-bg;
@@ -819,6 +957,10 @@
     -fx-border-width: 0 0 1 0;
 }
 .detail-song-row:hover { -fx-background-color: derive(bardo-player-bg1, -3%); }
+.detail-song-row-dragging, .detail-song-row-modern-dragging {
+    -fx-effect: dropshadow(gaussian, rgba(90,74,106,0.4), 18, 0.2, 0, 6);
+    -fx-background-color: derive(bardo-player-bg1, -3%);
+}
 .detail-thumb {
     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.12), 4, 0, 0, 1);
     -fx-background-radius: 4px;

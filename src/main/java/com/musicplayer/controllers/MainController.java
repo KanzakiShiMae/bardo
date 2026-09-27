@@ -10,12 +10,19 @@ import com.musicplayer.services.PersistenceService;
 import com.musicplayer.services.SpectrogramService;
 import com.musicplayer.services.YouTubeQuotaTracker;
 import com.musicplayer.services.YouTubeService;
+import com.musicplayer.services.YtDlpMetadataService;
 import javafx.animation.*;
+import org.kordamp.ikonli.Ikon;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.fxml.Initializable;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.*;
@@ -118,7 +125,7 @@ public class MainController implements Initializable {
     @FXML private ImageView        sidebarLogoBorder;
     @FXML private javafx.scene.layout.StackPane sidebarLogoStack;
     @FXML private VBox             sidebar;
-    @FXML private Button           btnHome, btnLibrary, btnSettings, btnNewGroup;
+    @FXML private Button           btnHome, btnLibrary, btnSettings, btnNewGroup, btnParty;
     @FXML private ListView<String> groupListView;
 
     @FXML private ScrollPane tabBarScroll;
@@ -129,15 +136,19 @@ public class MainController implements Initializable {
 
     @FXML private TextField         searchField;
     @FXML private Button            btnSearchGo, btnSearchVideos, btnSearchPlaylists;
+    @FXML private ToggleButton      btnUrlMode;
+    @FXML private Button            btnOpenBrowser, btnSwitchPlayer;
     @FXML private FlowPane          searchResultsPane;
     @FXML private Label             searchStatusLabel;
     @FXML private ProgressIndicator searchSpinner;
 
     @FXML private VBox libraryGroupsContainer;
+    @FXML private FlowPane libraryGroupsGrid;
 
     @FXML private HBox      nowPlayingBar;
     @FXML private ImageView albumArt;
     @FXML private Label     nowPlayingTitle, nowPlayingArtist;
+    @FXML private ProgressBar nowPlayingDownloadBar;
     @FXML private Button    btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat;
     @FXML private Slider    progressSlider, volumeSlider;
     @FXML private Label     timeElapsed, timeTotal, volumeLabel;
@@ -145,6 +156,7 @@ public class MainController implements Initializable {
     @FXML private javafx.scene.canvas.Canvas miniWaveCanvas;
 
     private LoadingOverlay loadingOverlay;
+    private javafx.scene.layout.Pane sceneReactionOverlay;
 
     private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
     private Image  logoPngSource;
@@ -171,6 +183,7 @@ public class MainController implements Initializable {
     private LibraryService      libraryService;
     private DownloadService     downloadService;
     private SpectrogramService  spectrogramService;
+    private YtDlpMetadataService ytDlpMetadataService;
 
     private final Set<String>          downloadingNow = new HashSet<>();
     private final List<AppTab>         openTabs       = new ArrayList<>();
@@ -178,6 +191,11 @@ public class MainController implements Initializable {
     private final ArrayDeque<String>   tabHistory     = new ArrayDeque<>();
     private AppTab         activeTab;
     private PlayerInstance focusedPlayer;
+    private PartyPanelBuilder partyPanelBuilder;
+
+    /** Pestañas de detalle de playlist abiertas (tabId "col:&lt;groupId&gt;" -> grupo), para poder
+     *  redibujarlas in situ cuando cambia el ajuste de diseño moderno/clásico en caliente. */
+    private final Map<String, LibraryGroup> openGroupDetailTabs = new HashMap<>();
 
     // Ambient ducking
     private double ambientDuckRatio = 0.60;
@@ -211,6 +229,10 @@ public class MainController implements Initializable {
     @Override
     public void initialize(URL url, ResourceBundle rb) {
         loadingOverlay = new LoadingOverlay(mainRootPane, 1);
+        sceneReactionOverlay = new javafx.scene.layout.Pane();
+        sceneReactionOverlay.setMouseTransparent(true);
+        sceneReactionOverlay.setPickOnBounds(false);
+        mainRootPane.getChildren().add(sceneReactionOverlay);
         loadingOverlay.setTargetNode(sidebarLogoStack);
         loadingOverlay.start();
 
@@ -219,6 +241,13 @@ public class MainController implements Initializable {
         appTitleLabel.setText(v.isBlank() ? "Bardo" : "Bardo v" + v);
 
         libraryService = LibraryService.getInstance();
+        libraryService.modernLibraryDesignProperty().addListener((obs, was, is) -> {
+            refreshLibraryPanel();
+            openGroupDetailTabs.forEach((tabId, g) -> {
+                AppTab t = findTab(tabId);
+                if (t != null) renderGroupDetail(t.panel, g);
+            });
+        });
         spectrogramService = new SpectrogramService();
         themeManager = new ThemeManager(libraryService, () -> focusedPlayer, activePlayers,
             sidebar, tabBarScroll, nowPlayingBar, contentArea);
@@ -228,6 +257,7 @@ public class MainController implements Initializable {
         quotaTracker    = new YouTubeQuotaTracker(apiKey);
         youTubeService  = new YouTubeService(apiKey, quotaTracker);
         downloadService = new DownloadService();
+        ytDlpMetadataService = new YtDlpMetadataService(downloadService);
         quotaTracker.exhaustedProperty().addListener((obs, wasEx, isEx) -> {
             if (isEx) showToast("Cuota de YouTube API agotada. La búsqueda se reanudará a medianoche (hora del Pacífico).");
         });
@@ -288,9 +318,8 @@ public class MainController implements Initializable {
             // Attach resize helper and store stage reference once the window is known
             scene.windowProperty().addListener((obs2, old2, win) -> {
                 if (win instanceof javafx.stage.Stage st) {
-                    resizeHelper = ResizeHelper.attach(st, scene);
+                    resizeHelper = ResizeHelper.attach(st, scene, () -> fakeFullScreen);
                     syncMaximizeIcon(st);
-                    st.maximizedProperty().addListener((o, wasMax, isMax) -> syncMaximizeIcon(st));
                 }
             });
         });
@@ -315,10 +344,51 @@ public class MainController implements Initializable {
             e.consume();
         });
 
+        setupIcons();
         refreshHomePanel();
-        openTab("home", "🏠", "Inicio", homePanel, true, btnHome);
+        openTab("home", BoxiconsRegular.HOME, "Inicio", homePanel, true, btnHome);
         animateEntrance();
         Platform.runLater(this::checkApiKey);
+    }
+
+    private void setupIcons() {
+        // Ventana — color secundario, iconos pequeños
+        ico(btnMinimize,  BoxiconsRegular.MINUS,     13, false); btnMinimize.setText("");
+        ico(btnMaximize,  BoxiconsRegular.EXPAND,    13, false); btnMaximize.setText("");
+        ico(btnClose,     BoxiconsRegular.X_CIRCLE,  13, false); btnClose.setText("");
+
+        // Búsqueda
+        ico(btnSearchGo,         BoxiconsSolid.SEARCH,      15, false); btnSearchGo.setText("");
+        ico(btnSearchVideos,     BoxiconsSolid.MUSIC,       14, true);  btnSearchVideos.setText(" Videos");
+        ico(btnSearchPlaylists,  BoxiconsRegular.LIST_UL,   14, true);  btnSearchPlaylists.setText(" Playlists");
+        ico(btnUrlMode,          BoxiconsRegular.LINK_ALT,  14, false); btnUrlMode.setText("");
+        btnUrlMode.setTooltip(new Tooltip("Introduce URL (descarga directa sin API de YouTube)"));
+
+        // Navegación lateral — color principal
+        ico(btnHome,     BoxiconsSolid.HOME,         17, true); btnHome.setText("  Inicio");
+        ico(btnLibrary,  BoxiconsRegular.LIBRARY,    17, true); btnLibrary.setText("  Biblioteca");
+        ico(btnSettings, BoxiconsSolid.COG,          17, true); btnSettings.setText("  Configuración");
+        ico(btnParty,    BoxiconsRegular.HEADPHONE,  17, true); btnParty.setText("  Party");
+        ico(btnNewGroup, BoxiconsSolid.PLUS_CIRCLE,  16, true); btnNewGroup.setText("  Nueva colección");
+
+        // Controles de reproducción — color principal
+        ico(btnPrev,      BoxiconsRegular.SKIP_PREVIOUS, 20, true); btnPrev.setText("");
+        ico(btnPlayPause, BoxiconsRegular.PLAY,           24, true); btnPlayPause.setText("");
+        ico(btnNext,      BoxiconsRegular.SKIP_NEXT,      20, true); btnNext.setText("");
+
+        // Controles secundarios — color secundario
+        ico(btnShuffle,      BoxiconsRegular.SHUFFLE,       17, false); btnShuffle.setText("");
+        ico(btnRepeat,       BoxiconsRegular.REPEAT,        17, false); btnRepeat.setText("");
+        ico(btnOpenBrowser,  BoxiconsRegular.LINK_ALT,      15, false); btnOpenBrowser.setText("");
+        ico(btnSwitchPlayer, BoxiconsRegular.TRANSFER_ALT,  15, false); btnSwitchPlayer.setText("");
+    }
+
+    static void ico(ButtonBase btn, Ikon ikon, int size, boolean primary) {
+        if (btn == null) return;
+        FontIcon fi = new FontIcon(ikon);
+        fi.setIconSize(size);
+        fi.getStyleClass().add(primary ? "icon-primary" : "icon-secondary");
+        btn.setGraphic(fi);
     }
 
     private void checkApiKey() {
@@ -336,7 +406,7 @@ public class MainController implements Initializable {
         alert.getButtonTypes().setAll(goBtn, laterBtn);
         alert.showAndWait().ifPresent(bt -> {
             if (bt.getButtonData() == ButtonBar.ButtonData.OK_DONE)
-                openTab("settings", "⚙", "Configuración", settingsPanel, true, btnSettings);
+                openTab("settings", BoxiconsSolid.COG, "Configuración", settingsPanel, true, btnSettings);
         });
     }
 
@@ -349,21 +419,33 @@ public class MainController implements Initializable {
     // ── Setup ─────────────────────────────────────────────────────────────────
 
     private void setupTitleBar() {
-        btnClose.setOnAction(e -> {
-            if (globalProgressTimer != null) globalProgressTimer.stop();
-            activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
-            spectrogramService.shutdown();
-            Platform.exit();
+        btnClose.setOnAction(e -> closeApp());
+
+        // Alt+F4 / cierre del sistema en ventana UNDECORATED → mismo handler
+        btnClose.sceneProperty().addListener((obs, o, scene) -> {
+            if (scene == null) return;
+            scene.windowProperty().addListener((obs2, o2, win) -> {
+                if (win instanceof javafx.stage.Stage s)
+                    s.setOnCloseRequest(ev -> closeApp());
+            });
         });
+
         btnMinimize.setOnAction(e -> stage().setIconified(true));
-        btnMaximize.setOnAction(e -> {
-            javafx.stage.Stage st = stage();
-            if (fakeFullScreen) {
-                setFakeFullScreen(st, false);
-            } else {
-                st.setMaximized(!st.isMaximized());
-            }
-        });
+        // Nunca se usa Stage.setMaximized(true) real: en ventanas UNDECORATED, Windows/JavaFX
+        // tiene un bug conocido donde restaurar desde el maximizado nativo deja el Stage con
+        // bounds incorrectos (la ventana queda más ancha/alta que la pantalla y sus bordes
+        // quedan fuera del área visible — "los extremos desaparecen"). setFakeFullScreen ya
+        // implementa un maximizado manual fiable (bounds copiados de Screen.getVisualBounds())
+        // que además usan el snap-to-top y F11; unificar aquí evita el bug por completo.
+        btnMaximize.setOnAction(e -> setFakeFullScreen(stage(), !fakeFullScreen));
+    }
+
+    private void closeApp() {
+        if (globalProgressTimer != null) globalProgressTimer.stop();
+        activePlayers.forEach(pi -> { if (pi.mediaPlayer != null) pi.mediaPlayer.stop(); });
+        spectrogramService.shutdown();
+        if (partyPanelBuilder != null) partyPanelBuilder.shutdown();
+        Platform.exit();
     }
 
     /** Obtiene el {@code Stage} principal a partir de cualquier nodo ya adjunto. */
@@ -373,16 +455,17 @@ public class MainController implements Initializable {
 
     /** Sincroniza el icono del botón maximizar con el estado actual de la ventana. */
     private void syncMaximizeIcon(javafx.stage.Stage st) {
-        Platform.runLater(() -> btnMaximize.setText(
-            (st.isMaximized() || fakeFullScreen) ? "❐" : "⛶"
-        ));
+        Platform.runLater(() -> {
+            ico(btnMaximize, fakeFullScreen ? BoxiconsRegular.EXIT_FULLSCREEN : BoxiconsRegular.EXPAND, 13, false);
+            btnMaximize.setText("");
+        });
     }
 
     private void setupWindowDrag() {
         titleBar.setOnMousePressed(e -> {
             titleBarDragging = false;
             if (resizeHelper != null && resizeHelper.isActive()) return;
-            if (stage().isMaximized() || fakeFullScreen) return;
+            if (fakeFullScreen) return;
             windowX = e.getSceneX(); windowY = e.getSceneY();
         });
         titleBar.setOnMouseDragged(e -> {
@@ -401,12 +484,6 @@ public class MainController implements Initializable {
                 } else {
                     return;
                 }
-            }
-            if (st.isMaximized()) {
-                double ratio = e.getScreenX() / st.getWidth();
-                st.setMaximized(false);
-                windowX = st.getWidth() * ratio;
-                windowY = e.getSceneY();
             }
             st.setX(e.getScreenX() - windowX);
             st.setY(e.getScreenY() - windowY);
@@ -501,9 +578,20 @@ public class MainController implements Initializable {
     }
 
     private void setupSidebarNavigation() {
-        btnHome.setOnAction(e     -> { refreshHomePanel(); openTab("home", "🏠", "Inicio", homePanel, true, btnHome); });
-        btnLibrary.setOnAction(e  -> { refreshLibraryPanel(); openTab("library", "📚", "Biblioteca",   libraryPanel,  true, btnLibrary); });
-        btnSettings.setOnAction(e -> openTab("settings", "⚙",  "Configuración", settingsPanel, true, btnSettings));
+        btnHome.setOnAction(e     -> { refreshHomePanel(); openTab("home", BoxiconsRegular.HOME, "Inicio", homePanel, true, btnHome); });
+        btnLibrary.setOnAction(e  -> { refreshLibraryPanel(); openTab("library", BoxiconsRegular.LIBRARY, "Biblioteca",   libraryPanel,  true, btnLibrary); });
+        btnSettings.setOnAction(e -> openTab("settings", BoxiconsSolid.COG, "Configuración", settingsPanel, true, btnSettings));
+        partyPanelBuilder = new PartyPanelBuilder(this, downloadService);
+        btnParty.setOnAction(e -> openTab("party", BoxiconsRegular.HEADPHONE, "Party", partyPanelBuilder.getPanel(), true, btnParty));
+
+        // ── DEBUG: abre dos ventanas de Party (master + listener) ─────────────
+        // Oculto de la UI (no se añade a la barra de título) pero sin borrar — reactivar
+        // añadiendo `debugPartyBtn` de vuelta a `titleBar.getChildren()` cuando haga falta probar.
+        Button debugPartyBtn = new Button("DEBUG Party");
+        debugPartyBtn.setStyle("-fx-background-color:#c0392b;-fx-text-fill:white;-fx-font-size:10px;-fx-padding:2 8;-fx-background-radius:4;");
+        debugPartyBtn.setOnAction(e -> openDebugPartyTabs());
+        debugPartyBtn.setVisible(false);
+        debugPartyBtn.setManaged(false);
 
         libraryService.getGroups().addListener(
             (javafx.collections.ListChangeListener<LibraryGroup>) c -> refreshSidebarList()
@@ -519,7 +607,7 @@ public class MainController implements Initializable {
 
     private void refreshSidebarList() {
         ObservableList<String> names = FXCollections.observableArrayList();
-        libraryService.getGroups().forEach(g -> names.add((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName()));
+        libraryService.getGroups().forEach(g -> names.add(g.getName()));
         groupListView.setItems(names);
     }
 
@@ -530,7 +618,7 @@ public class MainController implements Initializable {
      * Abre una pestaña con el ID dado, o la activa si ya existe.
      * El panel se añade a {@code contentArea} la primera vez.
      */
-    private void openTab(String id, String icon, String title, VBox panel, boolean closeable, Button sidebarBtn) {
+    private void openTab(String id, Ikon icon, String title, VBox panel, boolean closeable, Button sidebarBtn) {
         AppTab existing = findTab(id);
         if (existing != null) { existing.title = title; activateTab(existing); return; }
         AppTab tab = new AppTab(id, icon, title, panel, closeable, sidebarBtn);
@@ -563,22 +651,30 @@ public class MainController implements Initializable {
         }
         updateMiniPlayerVisibility();
 
-        for (Button b : new Button[]{btnHome, btnLibrary, btnSettings}) b.getStyleClass().remove("nav-btn-active");
+        for (Button b : new Button[]{btnHome, btnLibrary, btnSettings, btnParty}) b.getStyleClass().remove("nav-btn-active");
         if (tab.sidebarBtn != null) tab.sidebarBtn.getStyleClass().add("nav-btn-active");
 
         rebuildTabBar();
     }
 
-    private void closeTab(String id) {
+    private void closeTab(String id) { doCloseTab(id, false); }
+
+    /** Cierra la pestaña incluso si {@code closeable == false} (uso exclusivo del sistema Party). */
+    void closeTabForced(String id) { doCloseTab(id, true); }
+
+    private void doCloseTab(String id, boolean force) {
         AppTab tab = findTab(id);
-        if (tab == null || !tab.closeable) return;
+        if (tab == null || (!force && !tab.closeable)) return;
         int idx = openTabs.indexOf(tab);
         openTabs.remove(tab);
         contentArea.getChildren().remove(tab.panel);
+        if (id.startsWith("col:")) openGroupDetailTabs.remove(id);
 
         if (id.startsWith("player:") || id.startsWith("mashup:")) {
             PlayerInstance pi = findPlayerInstance(id);
             if (pi != null) {
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastCloseTrack(pi.song.getVideoId());
                 if (pi.mashupXfadeAnim != null) { pi.mashupXfadeAnim.stop(); pi.mashupXfadeAnim = null; }
                 if (pi.mediaPlayer != null) { pi.mediaPlayer.stop(); pi.mediaPlayer.dispose(); pi.mediaPlayer = null; }
                 if (pi.waveDecayAnim != null) { pi.waveDecayAnim.stop(); pi.waveDecayAnim = null; }
@@ -627,14 +723,34 @@ public class MainController implements Initializable {
         Label lbl = new Label(); lbl.getStyleClass().add("tab-label");
         lbl.setMaxWidth(tab.closeable ? TAB_WIDTH - 48 : TAB_WIDTH - 20); lbl.setMinWidth(0);
         HBox.setHgrow(lbl, Priority.ALWAYS);
+        if (tab.icon != null) {
+            FontIcon tabIcon = new FontIcon(tab.icon); tabIcon.setIconSize(13); tabIcon.getStyleClass().add("icon-secondary");
+            lbl.setGraphic(tabIcon);
+        }
         btn.getChildren().add(lbl);
 
-        Label dot = new Label("▶"); dot.setStyle("-fx-font-size: 7px; -fx-text-fill: #e8729a; -fx-padding: 0 2 0 0;");
+        Label dot = new Label();
+        FontIcon dotIcon = new FontIcon(BoxiconsSolid.CIRCLE); dotIcon.setIconSize(7); dotIcon.setIconColor(javafx.scene.paint.Color.web("#e8729a"));
+        dot.setGraphic(dotIcon); dot.setStyle("-fx-padding: 0 2 0 0;");
         dot.setManaged(false); dot.setVisible(false); // visibilidad real la fija updateTabNodeStyle
         btn.getChildren().add(dot);
 
+        if (tab.id.startsWith("player:") && partyPanelBuilder != null) {
+            Button partyBtn = new Button(); partyBtn.getStyleClass().add("tab-close-btn");
+            ico(partyBtn, BoxiconsSolid.MEGAPHONE, 11, false);
+            partyBtn.visibleProperty().bind(partyPanelBuilder.isMasterProperty());
+            partyBtn.managedProperty().bind(partyPanelBuilder.isMasterProperty());
+            partyBtn.setOnAction(e -> {
+                e.consume();
+                PlayerInstance pi = findPlayerInstance(tab.id);
+                if (pi != null && pi.song != null) partyPanelBuilder.addSongToParty(pi.song);
+            });
+            btn.getChildren().add(partyBtn);
+        }
+
         if (tab.closeable) {
-            Button x = new Button("×"); x.getStyleClass().add("tab-close-btn");
+            Button x = new Button(); x.getStyleClass().add("tab-close-btn");
+            ico(x, BoxiconsRegular.X, 11, false);
             final String tid = tab.id; x.setOnAction(e -> { e.consume(); closeTab(tid); });
             btn.getChildren().add(x);
         }
@@ -661,7 +777,7 @@ public class MainController implements Initializable {
         UIUtils.toggleStyleClass(btn, "tab-btn-playing", playing);
 
         Label lbl = (Label) btn.getChildren().get(0);
-        lbl.setText(tab.icon + "  " + tab.title);
+        lbl.setText(tab.title);
 
         Label dot = (Label) btn.getChildren().get(1);
         dot.setVisible(playing); dot.setManaged(playing);
@@ -821,10 +937,14 @@ public class MainController implements Initializable {
         downloadingNow.add(vid);
         nowPlayingTitle.setText("⬇ Descargando…"); nowPlayingArtist.setText(song.getTitle());
         nowPlayingBar.setVisible(true); nowPlayingBar.setManaged(true);
+        nowPlayingDownloadBar.setProgress(0);
+        nowPlayingDownloadBar.setVisible(true); nowPlayingDownloadBar.setManaged(true);
 
-        downloadService.downloadAudio(song, target.getId())
+        downloadService.downloadAudio(song, target.getId(),
+                pct -> Platform.runLater(() -> nowPlayingDownloadBar.setProgress(pct / 100.0)))
             .thenAccept(path -> Platform.runLater(() -> {
                 downloadingNow.remove(vid);
+                nowPlayingDownloadBar.setVisible(false); nowPlayingDownloadBar.setManaged(false);
                 song.setLocalFilePath(path.toString());
                 if (!song.hasDuration()) {
                     try {
@@ -839,6 +959,7 @@ public class MainController implements Initializable {
             .exceptionally(ex -> {
                 Platform.runLater(() -> {
                     downloadingNow.remove(vid);
+                    nowPlayingDownloadBar.setVisible(false); nowPlayingDownloadBar.setManaged(false);
                     showToast("Error: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
                     updateMiniPlayerVisibility();
                 });
@@ -864,7 +985,7 @@ public class MainController implements Initializable {
         if (pi.mediaPlayer != null) {
             pi.mediaPlayer.pause();
             pi.isPlaying = false;
-            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+            if (pi.panelPlayPause != null) ico(pi.panelPlayPause, BoxiconsRegular.PLAY, 24, true);
         }
 
         if (prevTab != null) activateTab(prevTab);
@@ -878,10 +999,23 @@ public class MainController implements Initializable {
             p -> navigateTab(-1),
             p -> navigateTab(+1),
             () -> toggleInlineSpectrogram(pi),
-            (p, pct) -> { if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct); applyVolumesToAll(); },
-            p -> { if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping); }
+            (p, pct) -> {
+                if (p == focusedPlayer && Math.abs(volumeSlider.getValue() - pct) > 0.5) volumeSlider.setValue(pct);
+                applyVolumesToAll();
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastVolume(pi.song.getVideoId(), pct / 100.0);
+            },
+            p -> {
+                if (p == focusedPlayer) UIUtils.toggleStyleClass(btnRepeat, "control-active", p.looping);
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastLoop(pi.song.getVideoId(), p.looping);
+            }
         );
         themeManager.applyContrastStroke(pi.panel, "bardo-text", "bardo-player-bg1");
+        if (pi.isMasterPartyPlayer && partyPanelBuilder != null) {
+            pi.onPartySeek = posMs -> { if (pi.song != null) partyPanelBuilder.masterBroadcastSeek(pi.song.getVideoId(), posMs); };
+            pi.onPartyMarkersChanged = () -> { if (pi.song != null) partyPanelBuilder.masterBroadcastLoopMarkers(pi.song.getVideoId(), pi.loopInPct, pi.loopOutPct, pi.loopMarkersActive); };
+        }
     }
 
     private void toggleInlineSpectrogram(PlayerInstance pi) {
@@ -1000,6 +1134,8 @@ public class MainController implements Initializable {
                                       ? tot.multiply(pi.loopInPct / 100.0) : Duration.ZERO;
                     pi.mediaPlayer.seek(seekTo);
                     pi.mediaPlayer.play();
+                    if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                        partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) seekTo.toMillis());
                 } else { onSongEnded(pi); }
             }));
             pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
@@ -1034,25 +1170,45 @@ public class MainController implements Initializable {
                 }
             });
 
-            pi.mediaPlayer.play();
-            pi.isPlaying = true;
+            if (pi.startPaused) {
+                pi.isPlaying = false;
+            } else {
+                pi.mediaPlayer.play();
+                pi.isPlaying = true;
+            }
             applyVolumesToAll();
             rebuildTabBar();
         } catch (Exception e) { showToast("No se puede reproducir: " + file.getName()); return; }
 
+        String displayTitle = (pi.isHiddenPartyTrack) ? "???" : song.getTitle();
         if (pi.panelTitle != null) {
-            pi.panelTitle.setText(song.getTitle()); pi.panelArtist.setText(song.getArtist());
+            pi.panelTitle.setText(displayTitle); pi.panelArtist.setText(pi.isHiddenPartyTrack ? "" : song.getArtist());
             pi.panelProgress.setValue(0); pi.panelElapsed.setText("0:00"); pi.panelTotal.setText("—");
-            pi.panelPlayPause.setText("⏸");
+            if (pi.panelPlayPause != null) ico(pi.panelPlayPause, pi.startPaused ? BoxiconsRegular.PLAY : BoxiconsRegular.PAUSE, 24, true);
         }
-        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
+        if (!pi.isHiddenPartyTrack && song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
             try { Image thumb = new Image(song.getThumbnailUrl(), true); if (pi.artView != null) pi.artView.setImage(thumb); }
             catch (Exception ignored) {}
         }
         AppTab existingTab = findTab(pi.tabId);
+        if (pi.isPartyListener) {
+            // Abrir en segundo plano: no cambiar la pestaña activa ni el reproductor enfocado
+            if (existingTab == null) {
+                AppTab tab = new AppTab(pi.tabId, BoxiconsSolid.MUSIC, displayTitle, pi.panel, false, null);
+                openTabs.add(tab);
+                if (!contentArea.getChildren().contains(pi.panel)) {
+                    pi.panel.setVisible(false); pi.panel.setManaged(false); contentArea.getChildren().add(pi.panel);
+                }
+            } else {
+                existingTab.title = displayTitle;
+            }
+            rebuildTabBar();
+            updateMiniPlayerVisibility();
+            if (focusedPlayer == null) { setFocusedPlayer(pi); updateLoopButtons(); }
+            return;
+        }
         if (existingTab != null) existingTab.title = song.getTitle();
-        openTab(pi.tabId, "🎵", song.getTitle(), pi.panel, true, null);
-
+        openTab(pi.tabId, BoxiconsSolid.MUSIC, song.getTitle(), pi.panel, true, null);
         setFocusedPlayer(pi);
         updateLoopButtons();
         updateMiniPlayerVisibility();
@@ -1070,12 +1226,21 @@ public class MainController implements Initializable {
                 if (tot != null && tot.greaterThan(Duration.ZERO))
                     pi.mediaPlayer.seek(tot.multiply(pi.loopInPct / 100.0));
             }
+            pi.mediaPlayer.setVolume(0);
             pi.mediaPlayer.play();
             pi.isPlaying = true;
-            applyVolumesToAll();
+            double target = effectiveVolume(pi);
+            pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(300),
+                new KeyValue(pi.mediaPlayer.volumeProperty(), target, Interpolator.EASE_OUT)));
+            pi.fadeOutAnim.setOnFinished(ev -> { pi.fadeOutAnim = null; applyVolumesToAll(); });
+            pi.fadeOutAnim.play();
             if (pi == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
             updatePlayPauseButton(); rebuildTabBar();
+            if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) pi.mediaPlayer.getCurrentTime().toMillis());
         } else {
+            if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                partyPanelBuilder.masterBroadcastPause(pi.song.getVideoId(), (long) pi.mediaPlayer.getCurrentTime().toMillis());
             fadeOutAndPause(pi);
         }
     }
@@ -1131,7 +1296,7 @@ public class MainController implements Initializable {
         if (pi == focusedPlayer) {
             removeGlowEffect(); updatePlayPauseButton();
         } else {
-            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+            if (pi.panelPlayPause != null) ico(pi.panelPlayPause, BoxiconsRegular.PLAY, 24, true);
         }
         if (pi.fadeOutAnim != null) pi.fadeOutAnim.stop();
         pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(700),
@@ -1151,7 +1316,7 @@ public class MainController implements Initializable {
         pi.isPlaying = false;
         applyVolumesToAll();
         startWaveDecay(pi);
-        if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+        if (pi.panelPlayPause != null) ico(pi.panelPlayPause, BoxiconsRegular.PLAY, 24, true);
         pickBestFocusedPlayer();
         themeManager.updateDynamicColors();
     }
@@ -1163,7 +1328,10 @@ public class MainController implements Initializable {
         double pct = (current.toSeconds() / total.toSeconds()) * 100;
         if (pi.loopMarkersActive && !pi.stoppedAtLoopOut && !pi.seeking && pi.loopOutPct < 100.0 && pct >= pi.loopOutPct) {
             if (pi.looping) {
-                pi.mediaPlayer.seek(total.multiply(pi.loopInPct / 100.0));
+                Duration seekTo = total.multiply(pi.loopInPct / 100.0);
+                pi.mediaPlayer.seek(seekTo);
+                if (pi.isMasterPartyPlayer && partyPanelBuilder != null && pi.song != null)
+                    partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) seekTo.toMillis());
             } else {
                 pi.stoppedAtLoopOut = true;
                 fadeOutAndPause(pi);
@@ -1373,9 +1541,10 @@ public class MainController implements Initializable {
 
     private void updatePlayPauseButton() {
         boolean playing = focusedPlayer != null && focusedPlayer.isPlaying;
-        btnPlayPause.setText(playing ? "⏸" : "▶");
+        ico(btnPlayPause, playing ? BoxiconsRegular.PAUSE : BoxiconsRegular.PLAY, 24, true);
+        btnPlayPause.setText("");
         if (focusedPlayer != null && focusedPlayer.panelPlayPause != null)
-            focusedPlayer.panelPlayPause.setText(playing ? "⏸" : "▶");
+            ico(focusedPlayer.panelPlayPause, playing ? BoxiconsRegular.PAUSE : BoxiconsRegular.PLAY, 24, true);
         rebuildTabBar();
     }
 
@@ -1391,13 +1560,28 @@ public class MainController implements Initializable {
      * "Now Playing": portada, título, artista, sliders de progreso y volumen,
      * botón play/pausa y estado de bucle.
      */
+    private void updatePartyListenerLock() {
+        boolean lock = focusedPlayer != null && focusedPlayer.isPartyListener;
+        for (Button b : new Button[]{btnPrev, btnPlayPause, btnNext, btnShuffle, btnRepeat}) {
+            b.setVisible(!lock); b.setManaged(!lock);
+        }
+        progressSlider.setMouseTransparent(lock);
+        volumeSlider.setVisible(!lock); volumeSlider.setManaged(!lock);
+        volumeLabel.setVisible(!lock);  volumeLabel.setManaged(!lock);
+    }
+
     private void setFocusedPlayer(PlayerInstance pi) {
         focusedPlayer = pi;
+        updatePartyListenerLock();
         Song song = pi.song;
         if (song != null) {
-            nowPlayingTitle.setText(song.getTitle()); nowPlayingArtist.setText(song.getArtist());
-            if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
-                try { albumArt.setImage(new Image(song.getThumbnailUrl(), true)); } catch (Exception ignored) {}
+            if (pi.isHiddenPartyTrack) {
+                nowPlayingTitle.setText("???"); nowPlayingArtist.setText("");
+            } else {
+                nowPlayingTitle.setText(song.getTitle()); nowPlayingArtist.setText(song.getArtist());
+                if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
+                    try { albumArt.setImage(new Image(song.getThumbnailUrl(), true)); } catch (Exception ignored) {}
+            }
         }
         if (pi.mediaPlayer != null) {
             Duration cur = pi.mediaPlayer.getCurrentTime(), total = pi.mediaPlayer.getMedia().getDuration();
@@ -1433,6 +1617,7 @@ public class MainController implements Initializable {
         if (candidates.isEmpty()) {
             focusedPlayer = null; removeGlowEffect();
             themeManager.fadeAllToBase();
+            updatePartyListenerLock();
             updatePlayPauseButton(); updateMiniPlayerVisibility(); return;
         }
         PlayerInstance best = null;
@@ -1491,8 +1676,18 @@ public class MainController implements Initializable {
         if (!searchField.getText().trim().isEmpty()) onSearchAction();
     }
 
+    @FXML private void onToggleUrlMode() {
+        boolean urlMode = btnUrlMode.isSelected();
+        UIUtils.toggleStyleClass(btnUrlMode, "toggle-btn-active", urlMode);
+        searchField.setPromptText(urlMode
+            ? "Pega la URL de un vídeo o playlist…"
+            : "Buscar en YouTube…");
+    }
+
     @FXML private void onSearchAction() {
         String query = searchField.getText().trim(); if (query.isEmpty()) return;
+
+        if (btnUrlMode.isSelected()) { handleUrlOnlyInput(query); return; }
 
         // ── Detect YouTube URL ────────────────────────────────────────────────
         String videoId    = extractYouTubeVideoId(query);
@@ -1502,7 +1697,7 @@ public class MainController implements Initializable {
         if (videoId    != null) { fetchVideoByUrl(videoId);       return; }
 
         // ── Normal text search ────────────────────────────────────────────────
-        openTab("search", "🔍", "🔍 " + query, searchPanel, true, null);
+        openTab("search", BoxiconsSolid.SEARCH, query, searchPanel, true, null);
         searchStatusLabel.setText("Buscando «" + query + "»…");
         searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
         int max = ConfigLoader.getInt("youtube.search.max_results", 20);
@@ -1545,7 +1740,7 @@ public class MainController implements Initializable {
     }
 
     private void fetchVideoByUrl(String videoId) {
-        openTab("search", "🔍", "🔍 vídeo", searchPanel, true, null);
+        openTab("search", BoxiconsSolid.SEARCH, "vídeo", searchPanel, true, null);
         searchStatusLabel.setText("Obteniendo vídeo…");
         searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
         youTubeService.getVideoById(videoId)
@@ -1560,7 +1755,7 @@ public class MainController implements Initializable {
     }
 
     private void fetchPlaylistByUrl(String playlistId) {
-        openTab("search", "🔍", "🔍 playlist", searchPanel, true, null);
+        openTab("search", BoxiconsSolid.SEARCH, "playlist", searchPanel, true, null);
         searchStatusLabel.setText("Obteniendo playlist…");
         searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
         youTubeService.getPlaylistById(playlistId)
@@ -1572,6 +1767,60 @@ public class MainController implements Initializable {
                     CardBuilder.playlistCard(pl, () -> importPlaylistToLibrary(pl)));
             }))
             .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Error de conexión."); }); return null; });
+    }
+
+    // ── URL mode (sin YouTube Data API, vía yt-dlp) ─────────────────────────────
+
+    private void handleUrlOnlyInput(String query) {
+        String videoId    = extractYouTubeVideoId(query);
+        String playlistId = extractYouTubePlaylistId(query);
+
+        if (playlistId != null) { fetchPlaylistByUrlNoApi(playlistId, query); return; }
+        if (videoId    != null) { fetchVideoByUrlNoApi(videoId);              return; }
+        showToast("URL no reconocida. Pega un enlace de vídeo o playlist de YouTube.");
+    }
+
+    private void fetchVideoByUrlNoApi(String videoId) {
+        openTab("search", BoxiconsSolid.SEARCH, "vídeo", searchPanel, true, null);
+        searchStatusLabel.setText("Obteniendo vídeo…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        ytDlpMetadataService.fetchVideo(videoId)
+            .thenAccept(song -> Platform.runLater(() -> {
+                searchSpinner.setVisible(false);
+                searchStatusLabel.setText("1 resultado");
+                searchResultsPane.getChildren().add(
+                    CardBuilder.songCard(song, () -> downloadAndPlay(song, null), UIUtils::openInBrowser, this::showGroupSelector, libraryService));
+            }))
+            .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Vídeo no encontrado."); }); return null; });
+    }
+
+    private void fetchPlaylistByUrlNoApi(String playlistId, String originalUrl) {
+        openTab("search", BoxiconsSolid.SEARCH, "playlist", searchPanel, true, null);
+        searchStatusLabel.setText("Obteniendo playlist…");
+        searchSpinner.setVisible(true); searchResultsPane.getChildren().clear();
+        ytDlpMetadataService.fetchPlaylist(originalUrl, playlistId)
+            .thenAccept(pl -> Platform.runLater(() -> {
+                searchSpinner.setVisible(false);
+                searchStatusLabel.setText("1 playlist");
+                YouTubePlaylistInfo info = new YouTubePlaylistInfo(
+                    pl.playlistId(), pl.title(), "", pl.thumbnailUrl(), "");
+                info.setItemCount(pl.songs().size());
+                searchResultsPane.getChildren().add(
+                    CardBuilder.playlistCard(info, () -> importPlaylistToLibraryNoApi(pl, originalUrl)));
+            }))
+            .exceptionally(ex -> { Platform.runLater(() -> { searchSpinner.setVisible(false); searchStatusLabel.setText("Playlist no encontrada."); }); return null; });
+    }
+
+    private void importPlaylistToLibraryNoApi(YtDlpMetadataService.PlaylistResult pl, String originalUrl) {
+        if (libraryService.getGroups().stream().anyMatch(g -> g.getId().equals(pl.playlistId()))) {
+            showToast("Ya está en tu biblioteca"); return;
+        }
+        LibraryGroup group = LibraryGroup.fromYouTubePlaylist(pl.playlistId(), pl.title(), pl.thumbnailUrl(), "");
+        group.setSourceUrl(originalUrl);
+        pl.songs().forEach(group::addSong);
+        libraryService.addGroup(group);
+        refreshLibraryPanel();
+        showToast("«" + pl.title() + "» añadida a la biblioteca");
     }
 
     @FXML private void onQuickSearchRecent()    { searchField.setText("top hits 2024");  onSearchAction(); }
@@ -1588,7 +1837,7 @@ public class MainController implements Initializable {
         dlg.showAndWait().filter(s -> !s.isBlank()).ifPresent(name -> {
             LibraryGroup g = libraryService.createGroup(name);
             refreshLibraryPanel();
-            openTab("library", "📚", "Biblioteca", libraryPanel, true, btnLibrary);
+            openTab("library", BoxiconsRegular.LIBRARY, "Biblioteca", libraryPanel, true, btnLibrary);
             offerImportFolder(g);
         });
     }
@@ -1608,25 +1857,34 @@ public class MainController implements Initializable {
     }
 
     private void refreshLibraryPanel() {
+        boolean modern = libraryService.isModernLibraryDesign();
+        libraryGroupsContainer.setVisible(!modern);  libraryGroupsContainer.setManaged(!modern);
+        libraryGroupsGrid.setVisible(modern);         libraryGroupsGrid.setManaged(modern);
+        // Solo se rellena el contenedor activo — el otro se limpia para no mantener en memoria
+        // ImageViews/tarjetas del diseño que no se está usando.
         libraryGroupsContainer.getChildren().clear();
+        libraryGroupsGrid.getChildren().clear();
+        Pane target = modern ? libraryGroupsGrid : libraryGroupsContainer;
+
         if (libraryService.getGroups().isEmpty()) {
             Label empty = new Label("Aún no tienes colecciones.\nUsa «Nueva colección» para empezar.");
             empty.getStyleClass().add("empty-library-hint"); empty.setWrapText(true);
-            libraryGroupsContainer.getChildren().add(empty); return;
+            target.getChildren().add(empty); return;
         }
         libraryService.getGroups().forEach(g ->
-            libraryGroupsContainer.getChildren().add(GroupDetailBuilder.groupSection(g,
+            target.getChildren().add(GroupDetailBuilder.groupCard(g,
                 () -> { libraryService.removeGroup(g); refreshLibraryPanel(); refreshSidebarList(); },
                 btn -> refreshYouTubePlaylist(g, btn),
-                () -> showGroupDetail(g)))
+                () -> showGroupDetail(g), modern))
         );
     }
 
-    private void showGroupDetail(LibraryGroup group) {
-        String tabId = "col:" + group.getId();
-        AppTab existing = findTab(tabId); if (existing != null) { activateTab(existing); return; }
-        VBox panel = GroupDetailBuilder.detailPanel(group,
-            () -> { refreshLibraryPanel(); openTab("library", "📚", "Biblioteca", libraryPanel, true, btnLibrary); },
+    /** Construye/reconstruye el contenido del panel de detalle de {@code group} dentro de
+     *  {@code panel} (mismo nodo, para no perder la identidad de la pestaña). Se usa tanto al
+     *  abrir la pestaña por primera vez como al cambiar en caliente el diseño moderno/clásico. */
+    private void renderGroupDetail(VBox panel, LibraryGroup group) {
+        GroupDetailBuilder.populateDetailPanel(panel, group,
+            () -> { refreshLibraryPanel(); openTab("library", BoxiconsRegular.LIBRARY, "Biblioteca", libraryPanel, true, btnLibrary); },
             () -> { List<Song> loc = group.getSongs().stream().filter(Song::isLocal).collect(Collectors.toList());
                     if (!loc.isEmpty()) playSongInQueue(loc.get(0), loc); else showToast("Sin archivos locales"); },
             () -> { importFolder(group); showGroupDetail(group); },
@@ -1636,9 +1894,19 @@ public class MainController implements Initializable {
             (song, grp) -> downloadAndPlay(song, grp),
             (song, grp) -> openSongPaused(song, grp),
             songs -> openMashupPlayer(songs.get(0), songs.get(1)),
-            libraryService, this::showToast, this::refreshHomePanel);
-        openTab(tabId, group.isYoutubePlaylist() ? "📺" : "📋", group.getName(), panel, true, btnLibrary);
+            libraryService, this::showToast, this::refreshHomePanel,
+            partyPanelBuilder.isMasterProperty(), partyPanelBuilder::addSongToParty,
+            libraryService.isModernLibraryDesign());
         themeManager.applyContrastStroke(panel, "bardo-text", "bardo-bg");
+    }
+
+    private void showGroupDetail(LibraryGroup group) {
+        String tabId = "col:" + group.getId();
+        AppTab existing = findTab(tabId); if (existing != null) { activateTab(existing); return; }
+        VBox panel = new VBox(0); panel.getStyleClass().add("panel"); panel.setPadding(Insets.EMPTY);
+        renderGroupDetail(panel, group);
+        openGroupDetailTabs.put(tabId, group);
+        openTab(tabId, group.isYoutubePlaylist() ? BoxiconsSolid.TV : BoxiconsRegular.LIST_UL, group.getName(), panel, true, btnLibrary);
     }
 
     private void openMashupPlayer(Song songA, Song songB) {
@@ -1670,7 +1938,7 @@ public class MainController implements Initializable {
         loadMashupSong(piA, songA);
         loadMashupSong(piB, songB);
 
-        openTab(tabId, "⇄", "Mashup", piA.panel, true, null);
+        openTab(tabId, BoxiconsRegular.TRANSFER_ALT, "Mashup", piA.panel, true, null);
         setFocusedPlayer(piA);
         updateMiniPlayerVisibility();
     }
@@ -1708,9 +1976,21 @@ public class MainController implements Initializable {
     }
 
     private void refreshYouTubePlaylist(LibraryGroup group, Button refreshBtn) {
-        String original = refreshBtn.getText(); refreshBtn.setDisable(true); refreshBtn.setText("…");
-        youTubeService.getPlaylistItems(group.getYoutubePlaylistId())
+        refreshBtn.setDisable(true);
+        DownloadDialogs.FetchProgressDialog progress = DownloadDialogs.showFetchProgress(
+            "Actualizando «" + group.getName() + "»",
+            contentArea.getScene().getWindow(),
+            getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm());
+
+        CompletableFuture<List<Song>> fetch = group.getSourceUrl() != null
+            ? ytDlpMetadataService.fetchPlaylist(group.getSourceUrl(), group.getYoutubePlaylistId())
+                .thenApply(r -> (List<Song>) r.songs())
+            : youTubeService.getPlaylistItems(group.getYoutubePlaylistId(), progress::update)
+                .thenApply(songs -> (List<Song>) songs);
+
+        fetch
             .thenAccept(songs -> Platform.runLater(() -> {
+                progress.close();
                 // Update durations of songs already in the group
                 Map<String, Song> fetchedMap = songs.stream()
                     .collect(Collectors.toMap(Song::getVideoId, s -> s, (a, b) -> a));
@@ -1719,11 +1999,11 @@ public class MainController implements Initializable {
                     if (f != null && !s.hasDuration())
                         s.setDuration(f.getDuration());
                 });
-                // Add truly new songs at the end
+                // Add truly new songs at the beginning
                 Set<String> existing = group.getSongs().stream().map(Song::getVideoId).collect(Collectors.toSet());
                 List<Song> newSongs = songs.stream().filter(s -> !existing.contains(s.getVideoId())).collect(Collectors.toList());
-                group.getSongs().addAll(newSongs);
-                refreshBtn.setDisable(false); refreshBtn.setText(original);
+                group.getSongs().addAll(0, newSongs);
+                refreshBtn.setDisable(false);
                 int added = newSongs.size();
                 showToast(added > 0
                     ? "+" + added + " canción" + (added == 1 ? "" : "es") + " nueva" + (added == 1 ? "" : "s") + " en «" + group.getName() + "»"
@@ -1731,7 +2011,11 @@ public class MainController implements Initializable {
                 refreshLibraryPanel();
             }))
             .exceptionally(ex -> {
-                Platform.runLater(() -> { refreshBtn.setDisable(false); refreshBtn.setText(original); showToast("Error al actualizar: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage()); });
+                Platform.runLater(() -> {
+                    progress.close();
+                    refreshBtn.setDisable(false);
+                    showToast("Error al actualizar: " + (ex.getCause() != null ? ex.getCause() : ex).getMessage());
+                });
                 return null;
             });
     }
@@ -1787,7 +2071,9 @@ public class MainController implements Initializable {
         if (!groups.isEmpty()) {
             menu.getItems().add(new SeparatorMenuItem());
             groups.forEach(g -> {
-                MenuItem item = new MenuItem((g.isYoutubePlaylist() ? "📺 " : "🎵 ") + g.getName());
+                MenuItem item = new MenuItem(g.getName());
+                FontIcon menuGroupIco = new FontIcon(g.isYoutubePlaylist() ? BoxiconsSolid.TV : BoxiconsSolid.MUSIC); menuGroupIco.setIconSize(13); menuGroupIco.getStyleClass().add("icon-secondary");
+                item.setGraphic(menuGroupIco);
                 item.setOnAction(ev -> {
                     if (g.getSongs().stream().noneMatch(s -> s.getVideoId().equals(song.getVideoId()))) {
                         song.setType(g.getType());
@@ -1827,8 +2113,11 @@ public class MainController implements Initializable {
         homePanel.setPadding(new javafx.geometry.Insets(28, 28, 28, 28));
 
         int hour = java.time.LocalTime.now().getHour();
-        Label greeting = new Label(hour < 12 ? "Buenos días ☀️" : hour < 18 ? "Buenas tardes 🌤" : "Buenas noches 🌙");
+        Label greeting = new Label(hour < 12 ? "  Buenos días" : hour < 18 ? "  Buenas tardes" : "  Buenas noches");
         greeting.getStyleClass().add("greeting");
+        greeting.setGraphic(hour < 18
+            ? IkonUtil.duotone(BoxiconsSolid.SUN, BoxiconsRegular.SUN, 22)
+            : IkonUtil.duotone(BoxiconsSolid.MOON, BoxiconsRegular.MOON, 22));
         Label sub = new Label("Tu música destacada");
         sub.getStyleClass().add("greeting-sub");
         homePanel.getChildren().add(new VBox(4, greeting, sub));
@@ -1843,7 +2132,7 @@ public class MainController implements Initializable {
         if (pinned.isEmpty() && top.isEmpty()) {
             Label hint = new Label(
                 "Aquí aparecerán tus canciones pineadas y tus colecciones más escuchadas.\n" +
-                "Pulsa 📌 en cualquier canción para pinearla, o reproduce canciones de una colección\n" +
+                "Pulsa el icono de marcador en cualquier canción para pinearla, o reproduce canciones de una colección\n" +
                 "(se necesitan al menos 5 reproducciones para que aparezca).");
             hint.setWrapText(true);
             hint.getStyleClass().add("empty-library-hint");
@@ -1862,10 +2151,37 @@ public class MainController implements Initializable {
             if (!pinned.isEmpty()) {
                 Label sectionLbl = new Label("CANCIONES PINEADAS");
                 sectionLbl.getStyleClass().add("sidebar-section-label");
+
+                Button allToPartyBtn = new Button("  Enviar todas a la sala");
+                allToPartyBtn.getStyleClass().add("btn-secondary");
+                allToPartyBtn.setStyle("-fx-font-size: 11px; -fx-padding: 3 10;");
+                ico(allToPartyBtn, BoxiconsSolid.MEGAPHONE, 12, true);
+                allToPartyBtn.visibleProperty().bind(partyPanelBuilder.isMasterProperty());
+                allToPartyBtn.managedProperty().bind(partyPanelBuilder.isMasterProperty());
+                allToPartyBtn.setOnAction(e -> partyPanelBuilder.addSongsToParty(pinned));
+
+                Region sectionHeaderSpacer = new Region();
+                HBox.setHgrow(sectionHeaderSpacer, Priority.ALWAYS);
+
+                Button unpinAllBtn = new Button();
+                unpinAllBtn.getStyleClass().add("btn-secondary");
+                unpinAllBtn.setStyle("-fx-font-size: 10px; -fx-padding: 3 7; -fx-opacity: 0.55;");
+                ico(unpinAllBtn, BoxiconsRegular.BOOKMARK, 11, false);
+                unpinAllBtn.setTooltip(new Tooltip("Despinear todas"));
+                unpinAllBtn.setOnAction(e -> {
+                    new java.util.ArrayList<>(pinned).forEach(s -> libraryService.unpinSong(s.getVideoId()));
+                    SoundPlayer.play("crash");
+                    refreshHomePanel();
+                });
+
+                HBox sectionHeaderRow = new HBox(12, sectionLbl, allToPartyBtn, sectionHeaderSpacer, unpinAllBtn);
+                sectionHeaderRow.setAlignment(Pos.CENTER_LEFT);
+                HBox.setHgrow(sectionLbl, Priority.NEVER);
+
                 javafx.scene.layout.FlowPane pinnedFlow = new javafx.scene.layout.FlowPane(20, 20);
                 pinnedFlow.setAlignment(Pos.TOP_LEFT);
                 pinned.forEach(s -> pinnedFlow.getChildren().add(buildPinnedSongCard(s)));
-                sections.getChildren().addAll(sectionLbl, pinnedFlow);
+                sections.getChildren().addAll(sectionHeaderRow, pinnedFlow);
             }
 
             if (!top.isEmpty()) {
@@ -1953,8 +2269,9 @@ public class MainController implements Initializable {
 
         if (!thumbUrls.isEmpty()) CardBuilder.loadImage(imgView, thumbUrls.get(0));
 
-        Button removeBtn = new Button("✕");
+        Button removeBtn = new Button();
         removeBtn.getStyleClass().add("home-overlay-btn");
+        ico(removeBtn, BoxiconsRegular.X, 11, false);
         removeBtn.setOpacity(0);
         StackPane.setAlignment(removeBtn, Pos.TOP_RIGHT);
         StackPane.setMargin(removeBtn, new javafx.geometry.Insets(7, 7, 0, 0));
@@ -2009,18 +2326,36 @@ public class MainController implements Initializable {
         if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
             CardBuilder.loadImage(imgView, song.getThumbnailUrl());
 
-        Button unpinBtn = new Button("📌");
+        Button unpinBtn = new Button();
         unpinBtn.getStyleClass().add("home-overlay-btn");
+        ico(unpinBtn, BoxiconsSolid.BOOKMARK, 14, true);
         unpinBtn.setOpacity(0);
         StackPane.setAlignment(unpinBtn, Pos.TOP_RIGHT);
         StackPane.setMargin(unpinBtn, new javafx.geometry.Insets(7, 7, 0, 0));
         unpinBtn.setOnAction(e -> { libraryService.unpinSong(song.getVideoId()); refreshHomePanel(); });
 
-        StackPane imgContainer = new StackPane(imgView, unpinBtn);
+        Button partyBtn = new Button();
+        partyBtn.getStyleClass().add("home-overlay-btn");
+        ico(partyBtn, BoxiconsSolid.MEGAPHONE, 14, false);
+        partyBtn.setOpacity(0);
+        partyBtn.setTooltip(new Tooltip("Añadir a la sala"));
+        partyBtn.visibleProperty().bind(partyPanelBuilder.isMasterProperty());
+        partyBtn.managedProperty().bind(partyPanelBuilder.isMasterProperty());
+        StackPane.setAlignment(partyBtn, Pos.TOP_LEFT);
+        StackPane.setMargin(partyBtn, new javafx.geometry.Insets(7, 0, 0, 7));
+        partyBtn.setOnAction(e -> partyPanelBuilder.addSongToParty(song));
+
+        StackPane imgContainer = new StackPane(imgView, unpinBtn, partyBtn);
         imgContainer.setPrefSize(160, 90); imgContainer.setMaxSize(160, 90);
         imgContainer.getStyleClass().add("home-playlist-thumb");
-        imgContainer.setOnMouseEntered(e -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(1); ft.play(); });
-        imgContainer.setOnMouseExited(e  -> { FadeTransition ft = new FadeTransition(Duration.millis(150), unpinBtn); ft.setToValue(0); ft.play(); });
+        imgContainer.setOnMouseEntered(e -> {
+            FadeTransition ftUnpin = new FadeTransition(Duration.millis(150), unpinBtn); ftUnpin.setToValue(1); ftUnpin.play();
+            FadeTransition ftParty = new FadeTransition(Duration.millis(150), partyBtn);  ftParty.setToValue(1); ftParty.play();
+        });
+        imgContainer.setOnMouseExited(e  -> {
+            FadeTransition ftUnpin = new FadeTransition(Duration.millis(150), unpinBtn); ftUnpin.setToValue(0); ftUnpin.play();
+            FadeTransition ftParty = new FadeTransition(Duration.millis(150), partyBtn);  ftParty.setToValue(0); ftParty.play();
+        });
         imgContainer.setOnMouseClicked(e -> {
             if (e.getTarget() instanceof Button) return;
             if (e.getButton() == javafx.scene.input.MouseButton.MIDDLE) { openSongPaused(song, null); return; }
@@ -2114,7 +2449,7 @@ public class MainController implements Initializable {
             pi.mediaPlayer.dispose();
             pi.mediaPlayer = null;
             pi.isPlaying   = false;
-            if (pi.panelPlayPause != null) pi.panelPlayPause.setText("▶");
+            if (pi.panelPlayPause != null) ico(pi.panelPlayPause, BoxiconsRegular.PLAY, 24, true);
         }
         updatePlayPauseButton();
         pickBestFocusedPlayer();
@@ -2185,35 +2520,42 @@ public class MainController implements Initializable {
                     }
                 }
 
-                // 4 & 5. Actualizar rutas y guardar en el hilo FX
+                // 4. Actualizar rutas en el hilo de fondo (Files.list lanza UncheckedIOException, no IOException)
+                for (LibraryGroup group : libraryService.getGroups()) {
+                    Path groupDir = newBaseDir.resolve(group.getId());
+                    for (Song song : group.getSongs()) {
+                        Path found = videoIdToFile.get(song.getVideoId());
+                        if (found == null && Files.isDirectory(groupDir)) {
+                            String vid = song.getVideoId();
+                            try (var ls = Files.list(groupDir)) {
+                                found = ls.filter(p -> p.getFileName().toString().startsWith(vid + "."))
+                                           .findFirst().orElse(null);
+                            } catch (Exception ignored) {}
+                        }
+                        if (found != null) song.setLocalFilePath(found.toString());
+                    }
+                }
+                for (Song pinned : libraryService.getPinnedSongs()) {
+                    Path found = videoIdToFile.get(pinned.getVideoId());
+                    if (found != null) pinned.setLocalFilePath(found.toString());
+                }
+
+                // 5. Guardar y actualizar UI en el hilo FX
                 Platform.runLater(() -> {
                     progressBar.setProgress(1.0);
-                    for (LibraryGroup group : libraryService.getGroups()) {
-                        Path groupDir = newBaseDir.resolve(group.getId());
-                        for (Song song : group.getSongs()) {
-                            Path found = videoIdToFile.get(song.getVideoId());
-                            if (found == null && Files.isDirectory(groupDir)) {
-                                String vid = song.getVideoId();
-                                try (var ls = Files.list(groupDir)) {
-                                    found = ls.filter(p -> p.getFileName().toString().startsWith(vid + "."))
-                                               .findFirst().orElse(null);
-                                } catch (IOException ignored) {}
-                            }
-                            if (found != null) song.setLocalFilePath(found.toString());
-                        }
+                    try {
+                        libraryService.save();
+                        refreshLibraryPanel();
+                        showToast("Carpeta de música actualizada.");
+                    } finally {
+                        javafx.stage.Stage dlgStage = (javafx.stage.Stage) progressDlg.getDialogPane().getScene().getWindow();
+                        dlgStage.close();
                     }
-                    for (Song pinned : libraryService.getPinnedSongs()) {
-                        Path found = videoIdToFile.get(pinned.getVideoId());
-                        if (found != null) pinned.setLocalFilePath(found.toString());
-                    }
-                    libraryService.save();
-                    refreshLibraryPanel();
-                    progressDlg.close();
-                    showToast("Carpeta de música actualizada.");
                 });
             } catch (Exception e) {
                 Platform.runLater(() -> {
-                    progressDlg.close();
+                    javafx.stage.Stage dlgStage = (javafx.stage.Stage) progressDlg.getDialogPane().getScene().getWindow();
+                    dlgStage.close();
                     showToast("Error al mover archivos: " + e.getMessage());
                 });
             }
@@ -2230,12 +2572,14 @@ public class MainController implements Initializable {
 
     // ── Utils ─────────────────────────────────────────────────────────────────
 
-    private void showToast(String message) {
+    void showToast(String message) {
         Platform.runLater(() -> {
             if (toastAnim != null) { toastAnim.stop(); toastAnim = null; }
             if (toastPopup != null) toastPopup.hide();
 
-            Label lbl = new Label("✓  " + message);
+            Label lbl = new Label("  " + message);
+            FontIcon toastIcon = new FontIcon(BoxiconsRegular.CHECK_CIRCLE); toastIcon.setIconSize(15); toastIcon.setIconColor(javafx.scene.paint.Color.WHITE);
+            lbl.setGraphic(toastIcon);
             lbl.setStyle(
                 "-fx-background-color: #5a3878;" +
                 "-fx-text-fill: white;" +
@@ -2501,5 +2845,155 @@ public class MainController implements Initializable {
             default: r = bri; g = p;   b = q;   break;
         }
         return (alpha << 24) | ((int)(r * 255f) << 16) | ((int)(g * 255f) << 8) | (int)(b * 255f);
+    }
+
+    // ── API interna para el sistema Party ─────────────────────────────────────
+
+    PlayerInstance getFocusedPlayer() { return focusedPlayer; }
+
+    PlayerInstance partyLoadSong(Song song, boolean hidden) {
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.isPartyListener      = true;
+        pi.isHiddenPartyTrack   = hidden;
+        pi.startPaused          = true;
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.add(song);
+        buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+        return pi;
+    }
+
+    PlayerInstance openMasterPartyPlayer(Song song) {
+        String tabId = "player:" + System.currentTimeMillis();
+        PlayerInstance pi = new PlayerInstance(tabId);
+        pi.isMasterPartyPlayer = true;
+        pi.startPaused         = true;
+        pi.volume = volumeSlider.getValue() / 100.0;
+        pi.queue.add(song);
+        buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+        return pi;
+    }
+
+    void partyPlay(PlayerInstance pi) {
+        if (pi == null || pi.mediaPlayer == null) return;
+        if (pi.fadeOutAnim != null) { pi.fadeOutAnim.stop(); pi.fadeOutAnim = null; }
+        pi.mediaPlayer.setVolume(0);
+        pi.mediaPlayer.play();
+        pi.isPlaying = true;
+        double target = effectiveVolume(pi);
+        pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(300),
+            new KeyValue(pi.mediaPlayer.volumeProperty(), target, Interpolator.EASE_OUT)));
+        pi.fadeOutAnim.setOnFinished(ev -> { pi.fadeOutAnim = null; applyVolumesToAll(); });
+        pi.fadeOutAnim.play();
+        if (pi == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
+        updatePlayPauseButton();
+        rebuildTabBar();
+    }
+
+    void revealPartyTrack(PlayerInstance pi) {
+        Song song = pi.song;
+        if (song == null) return;
+        pi.isHiddenPartyTrack = false;
+        if (pi.panelTitle  != null) pi.panelTitle.setText(song.getTitle());
+        if (pi.panelArtist != null) pi.panelArtist.setText(song.getArtist());
+        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
+            try {
+                Image thumb = new Image(song.getThumbnailUrl(), true);
+                if (pi.artView != null) pi.artView.setImage(thumb);
+                if (pi == focusedPlayer) albumArt.setImage(thumb);
+            } catch (Exception ignored) {}
+        }
+        AppTab tab = findTab(pi.tabId);
+        if (tab != null) { tab.title = song.getTitle(); rebuildTabBar(); }
+        if (pi == focusedPlayer) {
+            nowPlayingTitle.setText(song.getTitle());
+            nowPlayingArtist.setText(song.getArtist());
+        }
+    }
+
+    void partyPause(PlayerInstance pi, long seekMs) {
+        if (pi == null || pi.mediaPlayer == null) return;
+        pi.isPlaying = false;
+        if (pi == focusedPlayer) removeGlowEffect();
+        updatePlayPauseButton();
+        if (pi.fadeOutAnim != null) pi.fadeOutAnim.stop();
+        pi.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(700),
+            new KeyValue(pi.mediaPlayer.volumeProperty(), 0.0, Interpolator.EASE_IN)));
+        pi.fadeOutAnim.setOnFinished(ev -> {
+            pi.mediaPlayer.pause();
+            pi.mediaPlayer.seek(javafx.util.Duration.millis(seekMs));
+            startWaveDecay(pi);
+            pi.fadeOutAnim = null;
+            applyVolumesToAll();
+            rebuildTabBar();
+            if (pi == focusedPlayer || focusedPlayer == null) themeManager.updateDynamicColors();
+        });
+        pi.fadeOutAnim.play();
+    }
+
+    void showSceneReaction(String listenerEmoji, String reaction) {
+        if (sceneReactionOverlay == null) return;
+        org.kordamp.ikonli.javafx.FontIcon avatarIco = new org.kordamp.ikonli.javafx.FontIcon(listenerEmoji);
+        avatarIco.setIconSize(40);
+        avatarIco.setIconColor(javafx.scene.paint.Color.WHITE);
+        Label reactionLbl = new Label(reaction);
+        reactionLbl.setStyle("-fx-font-family: 'Segoe UI Emoji'; -fx-font-size: 54px;");
+        javafx.scene.layout.HBox lbl = new javafx.scene.layout.HBox(6, avatarIco, reactionLbl);
+        lbl.setAlignment(javafx.geometry.Pos.CENTER);
+        lbl.setStyle("-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.75), 10, 0, 0, 3);");
+        lbl.setScaleX(0.1); lbl.setScaleY(0.1);
+        Platform.runLater(() -> {
+            double w = sceneReactionOverlay.getWidth();
+            double h = sceneReactionOverlay.getHeight();
+            double x = 40 + Math.random() * Math.max(1, w - 160);
+            double y = h - 160 + (Math.random() * 60 - 30);
+            lbl.setLayoutX(x);
+            lbl.setLayoutY(y);
+            sceneReactionOverlay.getChildren().add(lbl);
+
+            javafx.animation.ScaleTransition pop = new javafx.animation.ScaleTransition(
+                javafx.util.Duration.millis(220), lbl);
+            pop.setFromX(0.1); pop.setFromY(0.1);
+            pop.setToX(1.0);   pop.setToY(1.0);
+            pop.setInterpolator(javafx.animation.Interpolator.EASE_OUT);
+
+            javafx.animation.TranslateTransition up = new javafx.animation.TranslateTransition(
+                javafx.util.Duration.seconds(2.8), lbl);
+            up.setByY(-220);
+            up.setInterpolator(javafx.animation.Interpolator.EASE_IN);
+
+            javafx.animation.FadeTransition fade = new javafx.animation.FadeTransition(
+                javafx.util.Duration.seconds(2.0), lbl);
+            fade.setFromValue(1.0); fade.setToValue(0.0);
+            fade.setDelay(javafx.util.Duration.millis(600));
+
+            javafx.animation.SequentialTransition seq = new javafx.animation.SequentialTransition(
+                pop,
+                new javafx.animation.ParallelTransition(up, fade)
+            );
+            seq.setOnFinished(ev -> sceneReactionOverlay.getChildren().remove(lbl));
+            seq.play();
+        });
+    }
+
+    private int debugListenerCount = 0;
+
+    /**
+     * Abre las pestañas de depuración de Party. La primera pulsación abre el Master y un primer
+     * Listener; como {@link #openTab} reutiliza la pestaña si el id ya existe, el Master nunca se
+     * duplica — cada pulsación posterior añade una pestaña de Listener nueva y distinta (con id y
+     * número incremental), para poder tener varios listeners simultáneos conectados a la misma sala.
+     */
+    private void openDebugPartyTabs() {
+        // El master usa el partyPanelBuilder principal: así isMasterProperty() y addSongToParty()
+        // funcionan correctamente y los botones 📢 de reproductores/playlists se activan.
+        openTab("debug-party-master", BoxiconsRegular.BROADCAST, "DEBUG Master", partyPanelBuilder.getPanel(), true, null);
+
+        // El listener tiene su propio builder independiente; uno nuevo en cada pulsación.
+        debugListenerCount++;
+        PartyPanelBuilder listenerBuilder = new PartyPanelBuilder(this, downloadService);
+        listenerBuilder.navigateToJoin();
+        openTab("debug-party-listener-" + debugListenerCount, BoxiconsRegular.LINK_ALT,
+            "DEBUG Listener " + debugListenerCount, listenerBuilder.getPanel(), true, null);
     }
 }

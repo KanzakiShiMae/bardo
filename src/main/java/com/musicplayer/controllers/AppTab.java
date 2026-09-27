@@ -1,5 +1,6 @@
 package com.musicplayer.controllers;
 
+import org.kordamp.ikonli.Ikon;
 import javafx.scene.control.Button;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
@@ -14,8 +15,8 @@ import javafx.scene.layout.VBox;
 public class AppTab {
     /** Identificador único de la pestaña. */
     public final String  id;
-    /** Emoji o carácter mostrado antes del título. */
-    public final String  icon;
+    /** Icono mostrado en la pestaña. */
+    public final Ikon    icon;
     /** Texto mutable: se actualiza al cargar una canción nueva. */
     public       String  title;
     /** Panel de contenido que se muestra en el área central al activar la pestaña. */
@@ -29,7 +30,7 @@ public class AppTab {
      *  Se reutiliza entre refrescos de estilo en lugar de recrearse en cada cambio. */
     public HBox barNode;
 
-    public AppTab(String id, String icon, String title, VBox panel, boolean closeable, Button sidebarBtn) {
+    public AppTab(String id, Ikon icon, String title, VBox panel, boolean closeable, Button sidebarBtn) {
         this.id = id; this.icon = icon; this.title = title;
         this.panel = panel; this.closeable = closeable; this.sidebarBtn = sidebarBtn;
     }

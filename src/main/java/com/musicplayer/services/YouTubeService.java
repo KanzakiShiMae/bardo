@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -131,10 +132,21 @@ public class YouTubeService {
     // ── Playlist items (all pages) ────────────────────────────────────────────
 
     public CompletableFuture<ObservableList<Song>> getPlaylistItems(String playlistId) {
+        return getPlaylistItems(playlistId, null);
+    }
+
+    /**
+     * Igual que {@link #getPlaylistItems(String)}, pero invoca {@code onProgress}
+     * (canciones obtenidas hasta ahora, total estimado) tras cada página de resultados.
+     * {@code onProgress} se llama desde el hilo de background del CompletableFuture —
+     * el llamador debe envolver cualquier actualización de UI en {@code Platform.runLater}.
+     */
+    public CompletableFuture<ObservableList<Song>> getPlaylistItems(String playlistId, BiConsumer<Integer, Integer> onProgress) {
         return CompletableFuture.supplyAsync(() -> {
             if (quotaTracker.isExhausted()) return FXCollections.observableArrayList();
             ObservableList<Song> all = FXCollections.observableArrayList();
             String pageToken = null;
+            int total = -1;
 
             do {
                 String url = BASE_URL + "/playlistItems"
@@ -146,8 +158,11 @@ public class YouTubeService {
 
                 quotaTracker.record(YouTubeQuotaTracker.COST_LOOKUP);
                 JsonObject root = JsonParser.parseString(rawGet(url)).getAsJsonObject();
+                if (total < 0 && root.has("pageInfo") && root.getAsJsonObject("pageInfo").has("totalResults"))
+                    total = root.getAsJsonObject("pageInfo").get("totalResults").getAsInt();
                 all.addAll(parsePlaylistItems(root));
                 pageToken = root.has("nextPageToken") ? root.get("nextPageToken").getAsString() : null;
+                if (onProgress != null) onProgress.accept(all.size(), total > 0 ? total : all.size());
 
             } while (pageToken != null);
 

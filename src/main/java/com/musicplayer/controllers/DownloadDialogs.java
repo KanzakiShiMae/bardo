@@ -4,6 +4,10 @@ import com.musicplayer.models.LibraryGroup;
 import com.musicplayer.models.Song;
 import com.musicplayer.services.DownloadService;
 import com.musicplayer.services.LibraryService;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -56,7 +60,8 @@ public final class DownloadDialogs {
         double estMb = count * 5.0;
 
         Stage stage = makeStage(owner);
-        Label titleLbl = label("⬇  Descargar todo", "-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #5a4a6a;");
+        Label titleLbl = label("  Descargar todo", "-fx-font-size: 16px; -fx-font-weight: bold; -fx-text-fill: #5a4a6a;");
+        titleLbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.DOWNLOAD, BoxiconsRegular.DOWNLOAD, 18));
         Label bodyLbl  = label("Se van a descargar " + count + " canción" + (count == 1 ? "" : "es") + " de «" + group.getName() + "».",
                                "-fx-font-size: 13px; -fx-text-fill: #6a5a7a;");
         bodyLbl.setWrapText(true);
@@ -64,7 +69,8 @@ public final class DownloadDialogs {
                                "-fx-font-size: 12px; -fx-text-fill: #a090b0; -fx-font-style: italic;");
 
         Button cancelBtn = new Button("Cancelar"); cancelBtn.getStyleClass().add("btn-secondary");
-        Button dlBtn     = new Button("⬇  Descargar"); dlBtn.getStyleClass().add("btn-primary");
+        Button dlBtn     = new Button("  Descargar"); dlBtn.getStyleClass().add("btn-primary");
+        MainController.ico(dlBtn, BoxiconsSolid.DOWNLOAD, 14, true);
         HBox btnRow = new HBox(10, cancelBtn, dlBtn); btnRow.setAlignment(Pos.CENTER_RIGHT);
 
         show(stage, root(380, titleLbl, bodyLbl, spaceLbl, btnRow), cssPath);
@@ -90,9 +96,11 @@ public final class DownloadDialogs {
         Label titleLbl = label("Descargando «" + group.getName() + "»",
                                "-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #5a4a6a;");
         HBox.setHgrow(titleLbl, Priority.ALWAYS);
-        Button closeBtn = new Button("✕");
-        closeBtn.setStyle("-fx-background-color: transparent; -fx-border-width: 0; -fx-text-fill: #b0a0c0; -fx-cursor: hand; -fx-font-size: 14px; -fx-padding: 0 4 0 4;");
-        closeBtn.setOnAction(e -> { cancelled.set(true); closeBtn.setDisable(true); closeBtn.setText("…"); });
+        Button closeBtn = new Button();
+        closeBtn.setStyle("-fx-background-color: transparent; -fx-border-width: 0; -fx-cursor: hand; -fx-padding: 0 4 0 4;");
+        FontIcon closeIcon = new FontIcon(BoxiconsRegular.X); closeIcon.setIconSize(14); closeIcon.getStyleClass().add("icon-secondary");
+        closeBtn.setGraphic(closeIcon);
+        closeBtn.setOnAction(e -> { cancelled.set(true); closeBtn.setDisable(true); closeBtn.setGraphic(null); closeBtn.setText("…"); });
         HBox titleRow = new HBox(10, titleLbl, closeBtn); titleRow.setAlignment(Pos.CENTER_LEFT);
 
         Label currentLbl = label("Preparando…", "-fx-font-size: 12px; -fx-text-fill: #8a7a9a;"); currentLbl.setWrapText(true); currentLbl.setMaxWidth(400);
@@ -109,7 +117,7 @@ public final class DownloadDialogs {
         for (Song song : songs) {
             chain = chain.thenCompose(v -> {
                 if (cancelled.get()) return CompletableFuture.completedFuture(null);
-                Platform.runLater(() -> currentLbl.setText("⬇  " + song.getTitle()));
+                Platform.runLater(() -> currentLbl.setText(song.getTitle()));
                 return dl.downloadAudio(song, group.getId())
                     .thenAccept(path -> Platform.runLater(() -> {
                         song.setLocalFilePath(path.toString());
@@ -138,8 +146,48 @@ public final class DownloadDialogs {
             if (cancelled.get())
                 toast.accept("Descarga cancelada (" + done[0] + " / " + total + " descargadas)");
             else
-                toast.accept("✓ Descarga completada — " + String.format("%.1f", doneMb[0]) + " MB");
+                toast.accept("Descarga completada — " + String.format("%.1f", doneMb[0]) + " MB");
         }));
+    }
+
+    // ── Progreso de fetch (actualizar playlist) ─────────────────────────────────
+
+    /** Handle para actualizar/cerrar un diálogo de progreso abierto con {@link #showFetchProgress}. */
+    public static final class FetchProgressDialog {
+        private final Stage stage;
+        private final ProgressBar bar;
+        private final Label countLbl;
+
+        private FetchProgressDialog(Stage stage, ProgressBar bar, Label countLbl) {
+            this.stage = stage; this.bar = bar; this.countLbl = countLbl;
+        }
+
+        /** Actualiza la barra con {@code fetched}/{@code total} canciones obtenidas hasta ahora. */
+        public void update(int fetched, int total) {
+            Platform.runLater(() -> {
+                bar.setProgress(total > 0 ? (double) fetched / total : ProgressBar.INDETERMINATE_PROGRESS);
+                countLbl.setText(fetched + (total > 0 ? " / " + total : "") + " canciones");
+            });
+        }
+
+        public void close() { Platform.runLater(stage::close); }
+    }
+
+    /** Abre un diálogo modal no bloqueante con una barra de progreso indeterminada hasta la primera actualización. */
+    public static FetchProgressDialog showFetchProgress(String title, Window owner, String cssPath) {
+        Stage stage = makeStage(owner);
+
+        Label titleLbl = label(title, "-fx-font-size: 14px; -fx-font-weight: bold; -fx-text-fill: #5a4a6a;");
+        FontIcon titleIcon = new FontIcon(BoxiconsRegular.REFRESH); titleIcon.setIconSize(16); titleIcon.setIconColor(Color.web("#5a4a6a"));
+        titleLbl.setGraphic(titleIcon);
+
+        ProgressBar fetchBar = bar(); fetchBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+        Label countLbl = label("Conectando…", "-fx-font-size: 12px; -fx-text-fill: #5a4a6a;");
+
+        show(stage, root(360, titleLbl, fetchBar, countLbl), cssPath);
+        centerOver(stage, owner);
+
+        return new FetchProgressDialog(stage, fetchBar, countLbl);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

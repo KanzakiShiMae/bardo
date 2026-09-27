@@ -1,5 +1,9 @@
 package com.musicplayer.controllers;
 
+import org.kordamp.ikonli.javafx.StackedFontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
+
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -93,8 +97,11 @@ public final class PlayerPanelBuilder {
             pi.seeking = false;
             if (pi.mediaPlayer != null) {
                 Duration total = pi.mediaPlayer.getMedia().getDuration();
-                if (total != null && total.greaterThan(Duration.ZERO))
-                    pi.mediaPlayer.seek(total.multiply(panelProgress.getValue() / 100.0));
+                if (total != null && total.greaterThan(Duration.ZERO)) {
+                    Duration seekTo = total.multiply(panelProgress.getValue() / 100.0);
+                    pi.mediaPlayer.seek(seekTo);
+                    if (pi.onPartySeek != null) pi.onPartySeek.accept((long) seekTo.toMillis());
+                }
             }
         });
         panelProgress.valueProperty().addListener((obs, old, val) -> {
@@ -135,32 +142,62 @@ public final class PlayerPanelBuilder {
             e.consume();
         });
         progressStack.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_RELEASED, e -> {
-            if (drag[0] != 0) { drag[0] = 0; e.consume(); }
+            if (drag[0] != 0) {
+                drag[0] = 0;
+                if (pi.onPartyMarkersChanged != null) pi.onPartyMarkersChanged.run();
+                e.consume();
+            }
         });
 
         HBox timeRow = new HBox(14, panelElapsed, progressStack, panelTotal);
         timeRow.setAlignment(Pos.CENTER);
         timeRow.setMaxWidth(Double.MAX_VALUE);
 
+        pi.panel = panel; pi.artStack = artStack; pi.artView = artView;
+        pi.panelWaveCanvas = waveCanvas;
+        pi.panelTitle = panelTitle; pi.panelArtist = panelArtist;
+        pi.panelProgress = panelProgress; pi.panelElapsed = panelElapsed; pi.panelTotal = panelTotal;
+        pi.panelSpectroCanvas = spectroCanvas;
+
+        if (pi.isPartyListener) {
+            // ── Listener mode: read-only — no controls, no volume, progress not interactive ──
+            progressStack.setMouseTransparent(true);
+            panel.getChildren().addAll(artStack, waveCanvas, panelTitle, panelArtist, timeRow);
+            return;
+        }
+
         // ── Controls ─────────────────────────────────────────────────────────
-        Button ppShuffle = new Button("≋"); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
-        Button ppPrev    = new Button("⏮"); ppPrev.getStyleClass().add("control-btn");    ppPrev.setOnAction(e -> onPrev.accept(pi));
-        Button ppPlay    = new Button("▶");  ppPlay.getStyleClass().add("play-btn");
-        ppPlay.setStyle("-fx-min-width:64px;-fx-min-height:64px;-fx-font-size:22px;");
+        Button ppShuffle = new Button(); ppShuffle.getStyleClass().add("control-btn"); ppShuffle.setOnAction(e -> onToggleShuffle.run());
+        MainController.ico(ppShuffle, BoxiconsRegular.SHUFFLE, 18, false);
+        Button ppPlay = new Button(); ppPlay.getStyleClass().add("play-btn");
+        ppPlay.setStyle("-fx-min-width:64px;-fx-min-height:64px;");
+        MainController.ico(ppPlay, BoxiconsRegular.PLAY, 24, true);
         ppPlay.setOnAction(e -> onTogglePlay.accept(pi));
-        Button ppNext   = new Button("⏭"); ppNext.getStyleClass().add("control-btn"); ppNext.setOnAction(e -> onNext.accept(pi));
-        Button ppRepeat = new Button("↺"); ppRepeat.getStyleClass().add("control-btn");
+        Button ppRepeat = new Button(); ppRepeat.getStyleClass().add("control-btn");
+        MainController.ico(ppRepeat, BoxiconsRegular.REPEAT, 18, false);
         ppRepeat.setOnAction(e -> {
             pi.looping = !pi.looping;
             UIUtils.toggleStyleClass(ppRepeat, "control-active-2", pi.looping);
             onLoopToggle.accept(pi);
         });
         if (pi.looping) ppRepeat.getStyleClass().add("control-active-2");
-        HBox controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
+
+        HBox controls;
+        if (pi.isMasterPartyPlayer) {
+            // Party master: sin anterior/siguiente
+            controls = new HBox(32, ppShuffle, ppPlay, ppRepeat);
+        } else {
+            Button ppPrev = new Button(); ppPrev.getStyleClass().add("control-btn"); ppPrev.setOnAction(e -> onPrev.accept(pi));
+            MainController.ico(ppPrev, BoxiconsRegular.SKIP_PREVIOUS, 18, true);
+            Button ppNext = new Button(); ppNext.getStyleClass().add("control-btn"); ppNext.setOnAction(e -> onNext.accept(pi));
+            MainController.ico(ppNext, BoxiconsRegular.SKIP_NEXT, 18, true);
+            controls = new HBox(32, ppShuffle, ppPrev, ppPlay, ppNext, ppRepeat);
+        }
         controls.setAlignment(Pos.CENTER);
 
         // ── Volume ───────────────────────────────────────────────────────────
-        Label volLbl = new Label("🔊"); volLbl.getStyleClass().add("time-label");
+        Label volLbl = new Label(); volLbl.getStyleClass().add("time-label");
+        volLbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.VOLUME_FULL, BoxiconsRegular.VOLUME_FULL, 16));
         Slider volSlider = new Slider(0, 100, pi.volume * 100);
         volSlider.getStyleClass().add("volume-slider"); volSlider.setPrefWidth(160);
         Label volPct = new Label((int) Math.round(pi.volume * 100) + "%");
@@ -176,12 +213,7 @@ public final class PlayerPanelBuilder {
 
         panel.getChildren().addAll(artStack, waveCanvas, panelTitle, panelArtist, timeRow, controls, volRow);
 
-        pi.panel = panel; pi.artStack = artStack; pi.artView = artView;
-        pi.panelWaveCanvas = waveCanvas;
-        pi.panelTitle = panelTitle; pi.panelArtist = panelArtist;
-        pi.panelProgress = panelProgress; pi.panelElapsed = panelElapsed; pi.panelTotal = panelTotal;
         pi.panelPlayPause = ppPlay; pi.panelRepeat = ppRepeat; pi.panelVolumeSlider = volSlider;
-        pi.panelSpectroCanvas = spectroCanvas;
         pi.panelShuffleBtn = ppShuffle;
     }
 }

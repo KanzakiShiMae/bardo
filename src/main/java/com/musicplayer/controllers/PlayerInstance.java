@@ -80,6 +80,15 @@ public class PlayerInstance {
     public javafx.beans.value.ChangeListener<Number> spectroWidthListener  = null;
     public javafx.beans.value.ChangeListener<Number> spectroHeightListener = null;
 
+    // ── Party listener mode (read-only player, no controls) ───────────────────
+    public boolean isPartyListener      = false;
+    public boolean isMasterPartyPlayer  = false;
+    public boolean startPaused          = false;
+    public boolean isHiddenPartyTrack   = false;
+    public java.util.function.LongConsumer onPartySeek = null;
+    /** Master: se llama cuando sueltan un marcador A/B arrastrado, para difundirlo a los listeners. */
+    public Runnable onPartyMarkersChanged = null;
+
     // ── Mashup pairing ─────────────────────────────────────────────────────────
     /** For Mashup players: the paired secondary player. Null for normal players. */
     public PlayerInstance mashupPartner  = null;

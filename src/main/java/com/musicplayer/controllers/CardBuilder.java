@@ -3,6 +3,9 @@ package com.musicplayer.controllers;
 import com.musicplayer.models.Song;
 import com.musicplayer.models.YouTubePlaylistInfo;
 import com.musicplayer.services.LibraryService;
+import org.kordamp.ikonli.javafx.FontIcon;
+import org.kordamp.ikonli.boxicons.BoxiconsRegular;
+import org.kordamp.ikonli.boxicons.BoxiconsSolid;
 import javafx.animation.*;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
@@ -55,7 +58,9 @@ public final class CardBuilder {
         overlay.setAlignment(Pos.CENTER);
         overlay.setStyle("-fx-background-color: rgba(0,0,0,0.45); -fx-background-radius: 8px 8px 0 0;");
         overlay.setOpacity(0);
-        Label playIcon = new Label("🔗"); playIcon.setStyle("-fx-font-size: 24px;");
+        Label playIcon = new Label();
+        FontIcon overlayIcon = new FontIcon(BoxiconsRegular.LINK_ALT); overlayIcon.setIconSize(24); overlayIcon.getStyleClass().add("icon-secondary");
+        playIcon.setGraphic(overlayIcon);
         overlay.getChildren().add(playIcon);
 
         StackPane thumbStack = new StackPane(thumb, overlay);
@@ -63,26 +68,31 @@ public final class CardBuilder {
         Label channelLbl = new Label(song.getChannelName()); channelLbl.getStyleClass().add("song-artist");
 
         Label ytBadge = new Label("YouTube"); ytBadge.getStyleClass().add("yt-badge"); HBox.setHgrow(ytBadge, Priority.ALWAYS);
-        Button linkBtn = new Button("🔗"); linkBtn.getStyleClass().add("row-link-btn");
+        Button linkBtn = new Button(); linkBtn.getStyleClass().add("row-link-btn");
+        MainController.ico(linkBtn, BoxiconsRegular.LINK_ALT, 14, false);
         linkBtn.setOnAction(e -> { e.consume(); onBrowser.accept(song.getVideoId()); });
-        Button addBtn = new Button("＋"); addBtn.getStyleClass().add("add-to-lib-btn");
+        Button addBtn = new Button(); addBtn.getStyleClass().add("add-to-lib-btn");
+        MainController.ico(addBtn, BoxiconsSolid.PLUS_CIRCLE, 14, false);
         addBtn.setOnAction(e -> { e.consume(); onAdd.accept(song, addBtn); });
         HBox bottomRow = new HBox(6, ytBadge, linkBtn, addBtn); bottomRow.setAlignment(Pos.CENTER_LEFT);
         if (libraryService != null) {
             boolean[] pinned = {libraryService.isSongPinned(song.getVideoId())};
-            Button pinBtn = new Button(pinned[0] ? "📌" : "📍");
+            Button pinBtn = new Button();
             pinBtn.getStyleClass().add("pin-card-btn");
             if (pinned[0]) pinBtn.getStyleClass().add("pin-card-btn-active");
+            MainController.ico(pinBtn, pinned[0] ? BoxiconsSolid.BOOKMARK : BoxiconsRegular.BOOKMARK, 14, pinned[0]);
             pinBtn.setOnAction(e -> {
                 e.consume();
                 if (pinned[0]) {
                     libraryService.unpinSong(song.getVideoId());
-                    pinned[0] = false; pinBtn.setText("📍");
+                    pinned[0] = false;
                     pinBtn.getStyleClass().remove("pin-card-btn-active");
+                    MainController.ico(pinBtn, BoxiconsRegular.BOOKMARK, 14, false);
                 } else {
                     libraryService.pinSong(song);
-                    pinned[0] = true; pinBtn.setText("📌");
+                    pinned[0] = true;
                     pinBtn.getStyleClass().add("pin-card-btn-active");
+                    MainController.ico(pinBtn, BoxiconsSolid.BOOKMARK, 14, true);
                 }
             });
             bottomRow.getChildren().add(pinBtn);
@@ -113,7 +123,8 @@ public final class CardBuilder {
         Label channelLbl = new Label(pl.getChannelName()); channelLbl.getStyleClass().add("song-artist");
         Label countLbl   = new Label(pl.getItemCount() > 0 ? pl.getItemCount() + " videos" : "Playlist"); countLbl.getStyleClass().add("song-duration");
 
-        Button addLib = new Button("＋  Añadir a biblioteca"); addLib.getStyleClass().add("btn-primary");
+        Button addLib = new Button("  Añadir a biblioteca"); addLib.getStyleClass().add("btn-primary");
+        MainController.ico(addLib, BoxiconsSolid.PLUS_CIRCLE, 14, true);
         addLib.setOnAction(e -> onImport.run());
         HBox actions = new HBox(10, addLib); actions.setAlignment(Pos.CENTER_LEFT);
 
