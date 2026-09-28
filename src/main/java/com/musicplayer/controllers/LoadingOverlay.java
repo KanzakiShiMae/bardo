@@ -97,10 +97,15 @@ class LoadingOverlay {
         loader.start();
     }
 
+    // Igual que el logo del sidebar (ver UIUtils.loadDownscaledImage): el PNG fuente mide
+    // ~4000px pero cada pieza se muestra a 180px, y ni el decodificador de Image ni el
+    // escalado de ImageView bastan para este arte de bordes duros — se reduce con Java2D
+    // al tamaño exacto de pantalla antes de convertirlo a Image.
     private Image loadImage(String path) {
-        try (java.io.InputStream in = getClass().getResourceAsStream(path)) {
-            return in != null ? new Image(in) : null;
-        } catch (Exception ignored) { return null; }
+        java.net.URL url = getClass().getResource(path);
+        if (url == null) return null;
+        try { return UIUtils.loadDownscaledImage(url, 180); }
+        catch (Exception ignored) { return null; }
     }
 
     /** Start the progress-bar fill and the minimum-display timer. Call once from initialize(). */

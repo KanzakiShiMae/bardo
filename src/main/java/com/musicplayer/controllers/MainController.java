@@ -159,6 +159,13 @@ public class MainController implements Initializable {
     private javafx.scene.layout.Pane sceneReactionOverlay;
 
     private final List<Timeline> homeCarouselTimelines = new ArrayList<>();
+    // El logo del sidebar se muestra a 180px (fitWidth/fitHeight del FXML). Se carga ya reducido
+    // a EXACTAMENTE ese tamaño (con Java2D, ver loadDownscaledFx) para que a ImageView no le quede
+    // NINGÚN escalado real que hacer — confirmado que incluso un ratio moderado (3:1, con un
+    // tamaño de carga mayor) seguía perdiendo calidad visible en este arte de bordes duros; con
+    // el tamaño exacto, en pantallas HiDPI (escala >100%) ImageView solo AMPLÍA ligeramente en vez
+    // de reducir, una operación mucho más segura para cualquier filtro bilineal simple.
+    private static final int LOGO_LOAD_SIZE = 180;
     private Image  logoPngSource;
     private byte[] logoZoneMap;
     private final java.util.concurrent.atomic.AtomicBoolean logoRecolorBusy =
@@ -269,9 +276,12 @@ public class MainController implements Initializable {
             final URL iconRef = iconUrl, filterRef = filterUrl, borderRef = borderUrl;
             Thread prep = new Thread(() -> {
                 try {
-                    Image png    = iconRef   != null ? new Image(iconRef.openStream())   : null;
-                    Image filter = filterRef != null ? new Image(filterRef.openStream()) : null;
-                    Image border = borderRef != null ? new Image(borderRef.openStream()) : null;
+                    // Ver UIUtils.loadDownscaledImage: ni el decodificador de Image ni el
+                    // escalado de ImageView bastan para este logo (arte de bordes duros); se
+                    // reduce a mano con Java2D hasta el tamaño exacto de pantalla (LOGO_LOAD_SIZE).
+                    Image png    = iconRef   != null ? UIUtils.loadDownscaledImage(iconRef,   LOGO_LOAD_SIZE) : null;
+                    Image filter = filterRef != null ? UIUtils.loadDownscaledImage(filterRef, LOGO_LOAD_SIZE) : null;
+                    Image border = borderRef != null ? UIUtils.loadDownscaledImage(borderRef, LOGO_LOAD_SIZE) : null;
                     byte[] zoneMap = png != null ? buildZoneMapFromPng(png) : null;
                     Platform.runLater(() -> {
                         if (filter != null) sidebarLogoFilter.setImage(filter);

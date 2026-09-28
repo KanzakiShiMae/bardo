@@ -58,7 +58,11 @@ public class App extends Application {
         initW = Math.min(initW, sb.getWidth());
         initH = Math.min(initH, sb.getHeight());
 
-        Scene scene = new Scene(loader.load(), initW, initH);
+        // BALANCED antialiasing: sin esto, una Scene 2D no suaviza los bordes de nodos
+        // rotados (p.ej. el logo del sidebar al arrastrarlo) — se ven dentados/pixelados
+        // al girar aunque la imagen fuente tenga muchísima más resolución que el tamaño
+        // en pantalla, porque el problema es el rasterizado del giro, no la imagen.
+        Scene scene = new Scene((javafx.scene.Parent) loader.load(), initW, initH, false, javafx.scene.SceneAntialiasing.BALANCED);
         scene.getStylesheets().add(
             getClass().getResource("/com/musicplayer/styles/main.css").toExternalForm()
         );

@@ -789,7 +789,7 @@ public final class GroupDetailBuilder {
 
     private static void installSmoothScroll(ListView<?> list) {
         Timeline[] anim   = {null};
-        double[]   target = {-1};
+        double[]   target = {0};
         list.addEventFilter(javafx.scene.input.ScrollEvent.SCROLL, e -> {
             ScrollBar vsb = verticalScrollBar(list);
             if (vsb == null || !vsb.isVisible()) return;
@@ -804,7 +804,14 @@ public final class GroupDetailBuilder {
             double scrollable  = Math.max(1, cellSize * itemCount - list.getHeight());
             double step        = SMOOTH_SCROLL_PX_PER_TICK / scrollable;
 
-            double current = target[0] >= 0 ? target[0] : vsb.getValue();
+            // "target[0]" solo es fiable como punto de partida mientras la animación anterior
+            // SIGUE en marcha (así varias muescas rápidas seguidas encadenan suave desde el
+            // destino, no desde el valor a medio camino, que se vería con tirones). Si no hay
+            // animación en marcha, el valor real del ScrollBar puede haber cambiado por otra vía
+            // (arrastrar la barra lateral a mano, scrollTo programático) sin pasar por aquí —
+            // confiar en el target[0] antiguo en ese caso saltaba desde una posición obsoleta.
+            boolean animRunning = anim[0] != null && anim[0].getStatus() == Animation.Status.RUNNING;
+            double current = animRunning ? target[0] : vsb.getValue();
             double delta = e.getDeltaY() > 0 ? -step : step;
             target[0] = Math.max(0, Math.min(1, current + delta));
             if (anim[0] != null) anim[0].stop();
