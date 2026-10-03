@@ -121,6 +121,9 @@ class PartyPanelBuilder {
             this.song = s;
             videoId      = s.getVideoId();
             title        = s.getTitle();
+            // Deliberadamente la miniatura de YouTube, NO Song.getDisplayThumbnailUrl(): un
+            // icono personalizado es un archivo file:// solo accesible en el disco del Master,
+            // así que enviárselo a un Listener remoto sería una URL rota en su máquina.
             thumbnailUrl = s.getThumbnailUrl() != null ? s.getThumbnailUrl() : "";
         }
     }

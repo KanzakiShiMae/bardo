@@ -27,6 +27,9 @@ public class Song {
     private final StringProperty thumbnailUrl;
     private final StringProperty channelName;
     private final StringProperty localFilePath;
+    /** Icono personalizado elegido manualmente (URI {@code file:} de una copia local en
+     *  {@code covers/}, ver {@code GroupDetailBuilder}). Si es null, la UI usa {@link #thumbnailUrl}. */
+    private final StringProperty customIconUrl = new SimpleStringProperty(null);
     private String type = "Música";
 
     /** Constructor para canciones de YouTube. */
@@ -87,6 +90,19 @@ public class Song {
 
     public String getThumbnailUrl()  { return thumbnailUrl.get(); }
     public StringProperty thumbnailUrlProperty() { return thumbnailUrl; }
+
+    public String getCustomIconUrl() { return customIconUrl.get(); }
+    /** El archivo de icono tiene siempre el mismo nombre por canción (se sobrescribe al elegir
+     *  uno nuevo) — igual que en {@code LibraryGroup}, se fuerza pasando por {@code null} primero
+     *  para que la UI se entere siempre de la imagen nueva aunque la ruta no cambie. */
+    public void setCustomIconUrl(String url) { customIconUrl.set(null); customIconUrl.set(url); }
+    public StringProperty customIconUrlProperty() { return customIconUrl; }
+
+    /** URL a mostrar en la UI: el icono personalizado si existe, si no la miniatura original. */
+    public String getDisplayThumbnailUrl() {
+        String c = customIconUrl.get();
+        return (c != null && !c.isBlank()) ? c : thumbnailUrl.get();
+    }
 
     public String getChannelName()   { return channelName.get(); }
     public StringProperty channelNameProperty() { return channelName; }

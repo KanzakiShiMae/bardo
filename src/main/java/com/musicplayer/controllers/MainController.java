@@ -1196,8 +1196,9 @@ public class MainController implements Initializable {
             pi.panelProgress.setValue(0); pi.panelElapsed.setText("0:00"); pi.panelTotal.setText("—");
             if (pi.panelPlayPause != null) ico(pi.panelPlayPause, pi.startPaused ? BoxiconsRegular.PLAY : BoxiconsRegular.PAUSE, 24, true);
         }
-        if (!pi.isHiddenPartyTrack && song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
-            try { Image thumb = new Image(song.getThumbnailUrl(), true); if (pi.artView != null) pi.artView.setImage(thumb); }
+        String panelArtUrl = song.getDisplayThumbnailUrl();
+        if (!pi.isHiddenPartyTrack && panelArtUrl != null && !panelArtUrl.isBlank()) {
+            try { Image thumb = new Image(panelArtUrl, true); if (pi.artView != null) pi.artView.setImage(thumb); }
             catch (Exception ignored) {}
         }
         AppTab existingTab = findTab(pi.tabId);
@@ -1589,8 +1590,9 @@ public class MainController implements Initializable {
                 nowPlayingTitle.setText("???"); nowPlayingArtist.setText("");
             } else {
                 nowPlayingTitle.setText(song.getTitle()); nowPlayingArtist.setText(song.getArtist());
-                if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
-                    try { albumArt.setImage(new Image(song.getThumbnailUrl(), true)); } catch (Exception ignored) {}
+                String miniArtUrl = song.getDisplayThumbnailUrl();
+                if (miniArtUrl != null && !miniArtUrl.isBlank())
+                    try { albumArt.setImage(new Image(miniArtUrl, true)); } catch (Exception ignored) {}
             }
         }
         if (pi.mediaPlayer != null) {
@@ -2333,8 +2335,9 @@ public class MainController implements Initializable {
         clip.setArcWidth(12); clip.setArcHeight(12);
         imgView.setClip(clip);
         imgView.setStyle("-fx-cursor: hand;");
-        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank())
-            CardBuilder.loadImage(imgView, song.getThumbnailUrl());
+        String pinnedArtUrl = song.getDisplayThumbnailUrl();
+        if (pinnedArtUrl != null && !pinnedArtUrl.isBlank())
+            CardBuilder.loadImage(imgView, pinnedArtUrl);
 
         Button unpinBtn = new Button();
         unpinBtn.getStyleClass().add("home-overlay-btn");
@@ -2906,9 +2909,10 @@ public class MainController implements Initializable {
         pi.isHiddenPartyTrack = false;
         if (pi.panelTitle  != null) pi.panelTitle.setText(song.getTitle());
         if (pi.panelArtist != null) pi.panelArtist.setText(song.getArtist());
-        if (song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
+        String revealArtUrl = song.getDisplayThumbnailUrl();
+        if (revealArtUrl != null && !revealArtUrl.isBlank()) {
             try {
-                Image thumb = new Image(song.getThumbnailUrl(), true);
+                Image thumb = new Image(revealArtUrl, true);
                 if (pi.artView != null) pi.artView.setImage(thumb);
                 if (pi == focusedPlayer) albumArt.setImage(thumb);
             } catch (Exception ignored) {}

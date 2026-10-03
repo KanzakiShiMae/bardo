@@ -131,8 +131,9 @@ public final class MashupPanelBuilder {
         ImageView art = new ImageView();
         art.setFitWidth(80); art.setFitHeight(80); art.setPreserveRatio(false);
         art.setClip(new Circle(40, 40, 40));
-        if (song != null && song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank()) {
-            try { art.setImage(new Image(song.getThumbnailUrl(), 80, 80, false, true, true)); } catch (Exception ignored) {}
+        String artUrl = song != null ? song.getDisplayThumbnailUrl() : null;
+        if (artUrl != null && !artUrl.isBlank()) {
+            try { art.setImage(new Image(artUrl, 80, 80, false, true, true)); } catch (Exception ignored) {}
         }
         Label bdg = new Label(badge);
         bdg.setStyle("-fx-font-size:18px; -fx-text-fill:" + ("①".equals(badge) ? "#e8729a" : "#6ba3d6") + ";");

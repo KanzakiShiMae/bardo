@@ -190,6 +190,7 @@ public class PersistenceService {
 
     private static class SongDto {
         String videoId, title, artist, duration, thumbnailUrl, channelName, localFilePath;
+        String customIconUrl;
     }
 
     private static class GroupDto {
@@ -207,20 +208,23 @@ public class PersistenceService {
 
     // ── Save ─────────────────────────────────────────────────────────────────
 
+    private static SongDto toSongDto(Song s) {
+        SongDto sd = new SongDto();
+        sd.videoId       = s.getVideoId();
+        sd.title         = s.getTitle();
+        sd.artist        = s.getArtist();
+        sd.duration      = s.getDuration();
+        sd.thumbnailUrl  = s.getThumbnailUrl();
+        sd.channelName   = s.getChannelName();
+        sd.localFilePath = s.getLocalFilePath();
+        sd.customIconUrl = s.getCustomIconUrl();
+        return sd;
+    }
+
     public void save(List<LibraryGroup> groups, List<Song> pinnedSongs) {
         LibraryDto dto = new LibraryDto();
         if (pinnedSongs != null) {
-            for (Song s : pinnedSongs) {
-                SongDto sd = new SongDto();
-                sd.videoId       = s.getVideoId();
-                sd.title         = s.getTitle();
-                sd.artist        = s.getArtist();
-                sd.duration      = s.getDuration();
-                sd.thumbnailUrl  = s.getThumbnailUrl();
-                sd.channelName   = s.getChannelName();
-                sd.localFilePath = s.getLocalFilePath();
-                dto.pinnedSongs.add(sd);
-            }
+            for (Song s : pinnedSongs) dto.pinnedSongs.add(toSongDto(s));
         }
         for (LibraryGroup g : groups) {
             GroupDto gd = new GroupDto();
@@ -235,17 +239,7 @@ public class PersistenceService {
             gd.sourceUrl        = g.getSourceUrl();
             gd.customIconUrl    = g.getCustomIconUrl();
             gd.customBannerUrl  = g.getCustomBannerUrl();
-            for (Song s : g.getSongs()) {
-                SongDto sd = new SongDto();
-                sd.videoId       = s.getVideoId();
-                sd.title         = s.getTitle();
-                sd.artist        = s.getArtist();
-                sd.duration      = s.getDuration();
-                sd.thumbnailUrl  = s.getThumbnailUrl();
-                sd.channelName   = s.getChannelName();
-                sd.localFilePath = s.getLocalFilePath();
-                gd.songs.add(sd);
-            }
+            for (Song s : g.getSongs()) gd.songs.add(toSongDto(s));
             dto.groups.add(gd);
         }
 
@@ -275,14 +269,7 @@ public class PersistenceService {
                     : LibraryGroup.createCustomWithId(gd.id, gd.name);
 
                 if (gd.songs != null) {
-                    for (SongDto sd : gd.songs) {
-                        Song song = new Song(
-                            orEmpty(sd.videoId), orEmpty(sd.title), orEmpty(sd.artist),
-                            orEmpty(sd.duration), sd.thumbnailUrl, orEmpty(sd.channelName),
-                            sd.localFilePath
-                        );
-                        group.getSongs().add(song);
-                    }
+                    for (SongDto sd : gd.songs) group.getSongs().add(fromSongDto(sd));
                 }
                 group.setType(gd.type != null ? gd.type : "Música");
                 group.setPlayCount(gd.playCount);
@@ -303,11 +290,16 @@ public class PersistenceService {
             LibraryDto dto = gson.fromJson(Files.readString(SAVE_FILE), LibraryDto.class);
             if (dto == null || dto.pinnedSongs == null) return new ArrayList<>();
             List<Song> result = new ArrayList<>();
-            for (SongDto sd : dto.pinnedSongs)
-                result.add(new Song(orEmpty(sd.videoId), orEmpty(sd.title), orEmpty(sd.artist),
-                    orEmpty(sd.duration), sd.thumbnailUrl, orEmpty(sd.channelName), sd.localFilePath));
+            for (SongDto sd : dto.pinnedSongs) result.add(fromSongDto(sd));
             return result;
         } catch (Exception e) { return new ArrayList<>(); }
+    }
+
+    private static Song fromSongDto(SongDto sd) {
+        Song song = new Song(orEmpty(sd.videoId), orEmpty(sd.title), orEmpty(sd.artist),
+            orEmpty(sd.duration), sd.thumbnailUrl, orEmpty(sd.channelName), sd.localFilePath);
+        if (sd.customIconUrl != null) song.setCustomIconUrl(sd.customIconUrl);
+        return song;
     }
 
     private static String orEmpty(String s) { return s != null ? s : ""; }

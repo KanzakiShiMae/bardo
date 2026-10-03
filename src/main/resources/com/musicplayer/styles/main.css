@@ -1069,6 +1069,25 @@
 .mashup-row-sel-a { -fx-background-color: derive(bardo-accent, 76%); }
 .mashup-row-sel-b { -fx-background-color: derive(bardo-accent2, 76%); }
 
+/* Insignia de selección de Mashup sobre la portada de una tarjeta de la cuadrícula —
+   mismo papel que .mashup-sel-btn en la fila clásica, pero con fondo sólido (como
+   .song-grid-card-pin-btn) para tener contraste sobre una foto en vez de un fondo claro. */
+.song-grid-card-sel-btn {
+    -fx-background-color: rgba(255,255,255,0.85);
+    -fx-background-radius: 50%;
+    -fx-text-fill: derive(bardo-text-muted, -5%);
+    -fx-font-size: 13px; -fx-font-weight: bold;
+    -fx-min-width: 24px; -fx-max-width: 24px;
+    -fx-min-height: 24px; -fx-max-height: 24px;
+    -fx-padding: 0; -fx-border-width: 0; -fx-cursor: hand;
+    -fx-opacity: 0.8;
+}
+.song-grid-card-sel-btn:hover    { -fx-background-color: white; -fx-opacity: 1.0; }
+.song-grid-card-sel-btn-active-a { -fx-opacity: 1.0; -fx-background-color: bardo-accent;  -fx-text-fill: white; }
+.song-grid-card-sel-btn-active-b { -fx-opacity: 1.0; -fx-background-color: bardo-accent2; -fx-text-fill: white; }
+.song-grid-card-cover-sel-a { -fx-effect: dropshadow(gaussian, derive(bardo-accent, -10%), 14, 0.55, 0, 0); }
+.song-grid-card-cover-sel-b { -fx-effect: dropshadow(gaussian, derive(bardo-accent2, -10%), 14, 0.55, 0, 0); }
+
 .mashup-xfade-btn {
     -fx-background-color: derive(bardo-sidebar-bg, -5%);
     -fx-background-radius: 50%; -fx-text-fill: derive(bardo-text, 20%);

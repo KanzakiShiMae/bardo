@@ -132,12 +132,24 @@ public class LibraryService {
     }
 
     private void watchGroup(LibraryGroup group) {
-        group.getSongs().addListener((ListChangeListener<Song>) c -> debouncedSave());
+        group.getSongs().addListener((ListChangeListener<Song>) c -> {
+            while (c.next()) {
+                if (c.wasAdded()) for (Song s : c.getAddedSubList()) watchSong(s);
+            }
+            debouncedSave();
+        });
+        group.getSongs().forEach(this::watchSong);
         // Sin estos dos, el icono/banner personalizado (GroupDetailBuilder.pickAndStoreImage)
         // solo cambiaba en memoria — nunca disparaba una escritura a disco por sí solo, así que
         // se perdía al reiniciar la app salvo que alguna otra acción (añadir una canción, etc.)
         // disparase un guardado por casualidad.
         group.customIconUrlProperty().addListener((o, ov, nv) -> debouncedSave());
         group.customBannerUrlProperty().addListener((o, ov, nv) -> debouncedSave());
+    }
+
+    /** Igual motivo que los dos listeners de arriba, pero para el icono personalizado de una
+     *  canción concreta ({@code Song.setCustomIconUrl}) — sin esto también se perdía al reiniciar. */
+    private void watchSong(Song song) {
+        song.customIconUrlProperty().addListener((o, ov, nv) -> debouncedSave());
     }
 }

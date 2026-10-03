@@ -279,6 +279,87 @@ public final class GroupDetailBuilder {
         });
     }
 
+    /** Igual que {@link #pickAndStoreImage}, pero para el icono de una canción individual (no de
+     *  un grupo) — reutiliza el mismo {@link #openCropDialog} (siempre cuadrado, {@code banner=
+     *  false}). Cualquier canción puede tener su propio icono, sea de YouTube o local. */
+    private static void pickAndStoreSongIcon(Song song, Window owner, Consumer<String> onToast) {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Elegir icono de la canción");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
+            "Imágenes", "*.png", "*.jpg", "*.jpeg", "*.webp", "*.gif", "*.bmp"));
+        File picked = chooser.showOpenDialog(owner);
+        if (picked == null) return;
+
+        Image src;
+        try { src = new Image(picked.toURI().toString()); } catch (Exception ex) {
+            onToast.accept("No se pudo abrir la imagen: " + ex.getMessage()); return;
+        }
+        if (src.isError() || src.getWidth() <= 0) {
+            onToast.accept("No se pudo leer la imagen elegida."); return;
+        }
+
+        openCropDialog(src, false, owner, cropped -> {
+            try {
+                Path dir = PersistenceService.bardoBaseDir().resolve("covers");
+                Files.createDirectories(dir);
+                Path dest = dir.resolve("song-" + songFileKey(song) + "-icon.png");
+                BufferedImage buffered = toBufferedImage(cropped);
+                ImageIO.write(buffered, "png", dest.toFile());
+                song.setCustomIconUrl(dest.toUri().toString());
+                onToast.accept("Icono de la canción actualizado");
+            } catch (Exception ex) {
+                onToast.accept("Error al guardar la imagen: " + ex.getMessage());
+            }
+        });
+    }
+
+    /** Botón compacto ("row-checklist-btn", mismo tamaño que el resto de botones de fila) con un
+     *  menú de 2 opciones para elegir/quitar el icono personalizado de {@code song} — compartido
+     *  por {@link #detailSongRow} y {@link #detailSongRowMashup} (lista clásica). */
+    private static Button buildSongIconMenuButton(Song song, Consumer<String> onToast) {
+        Button btn = new Button(); btn.getStyleClass().add("row-checklist-btn");
+        MainController.ico(btn, BoxiconsRegular.IMAGE_ADD, 14, false);
+        btn.setTooltip(new Tooltip("Icono personalizado"));
+        ContextMenu[] menuRef = {null};
+        btn.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            if (menuRef[0] != null && menuRef[0].isShowing()) { menuRef[0].hide(); e.consume(); }
+        });
+        btn.setOnAction(e -> {
+            ContextMenu menu = new ContextMenu();
+            MenuItem pick = new MenuItem(song.getCustomIconUrl() != null ? "Cambiar icono…" : "Elegir icono…");
+            pick.setOnAction(ev -> pickAndStoreSongIcon(song,
+                btn.getScene() != null ? btn.getScene().getWindow() : null, onToast));
+            menu.getItems().add(pick);
+            if (song.getCustomIconUrl() != null) {
+                MenuItem clear = new MenuItem("Quitar icono personalizado");
+                clear.setOnAction(ev -> { song.setCustomIconUrl(null); onToast.accept("Icono personalizado eliminado"); });
+                menu.getItems().add(clear);
+            }
+            menuRef[0] = menu;
+            menu.show(btn, Side.BOTTOM, 0, 0);
+        });
+        return btn;
+    }
+
+    /** Nombre de archivo seguro y estable para el icono de una canción — igual patrón que
+     *  {@code SpectrogramService.getSongId}: el videoId de YouTube (11 caracteres) ya es válido
+     *  como nombre de archivo tal cual; para canciones locales, {@code videoId} es la ruta
+     *  absoluta del archivo (puede tener {@code :}, {@code \}, etc.), así que se usa un hash. */
+    private static String songFileKey(Song song) {
+        String id = song.getVideoId();
+        if (id == null) id = "";
+        if (id.length() == 11 && id.matches("[A-Za-z0-9_\\-]+")) return id;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(id.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(64);
+            for (byte b : hash) sb.append(String.format("%02x", b));
+            return sb.substring(0, 32);
+        } catch (Exception e) {
+            return Integer.toHexString(id.hashCode());
+        }
+    }
+
     private static final double ICON_CROP_SIZE = 280;
     private static final double BANNER_CROP_W  = 480;
     private static final double BANNER_CROP_H  = 135;
@@ -720,22 +801,6 @@ public final class GroupDetailBuilder {
         mashupBar.getStyleClass().add("mashup-bar");
         mashupBar.setVisible("Mashup".equals(group.getType()));
         mashupBar.setManaged("Mashup".equals(group.getType()));
-        javafx.beans.value.ChangeListener<String> typeListener = (obs, old, t) -> {
-            boolean m = "Mashup".equals(t);
-            // En modo moderno, Mashup usa la lista de filas (no la cuadrícula) — cambiar hacia
-            // o desde Mashup cambia de widget por completo, así que hay que repoblar el panel
-            // entero en vez de solo alternar la barra de mashup.
-            if (modern && (m != "Mashup".equals(old))) {
-                populateDetailPanel(panel, group, onBack, onPlayAll, onImportFolder, onRefreshYt, onDownloadAll,
-                    onBrowser, onPlaySong, onOpenPaused, onOpenMashup, libraryService, onToast, onPinChanged,
-                    masterActive, onAddToParty, modern);
-                return;
-            }
-            mashupBar.setVisible(m); mashupBar.setManaged(m);
-            if (!m) { mashupSel[0] = null; mashupSel[1] = null; mashupPlayBtn[0].setDisable(true); }
-        };
-        group.typeProperty().addListener(typeListener);
-        panel.getProperties().put("groupDetailTypeListener", typeListener);
 
         // ── Search ───────────────────────────────────────────────────────────
         FilteredList<Song> filteredSongs = new FilteredList<>(group.getSongs(), p -> true);
@@ -756,14 +821,27 @@ public final class GroupDetailBuilder {
         searchRow.setAlignment(Pos.CENTER_RIGHT);
         searchRow.setPadding(new Insets(8, 28, 6, 28));
 
-        boolean useGrid = modern && !"Mashup".equals(group.getType());
-        ListView<?> songList = useGrid
+        // En diseño moderno, Mashup usa la misma cuadrícula que el resto de tipos — solo cambia
+        // qué hace un click en la tarjeta (seleccionar ①/② en vez de reproducir) y una insignia
+        // de selección sobre la portada, ver buildSongGrid/buildSongGridCard.
+        ListView<?> songList = modern
             ? buildSongGrid(group, filteredSongs, searchField, onBrowser, onPlaySong, onOpenPaused,
-                libraryService, onToast, onPinChanged, masterActive, onAddToParty)
+                libraryService, onToast, onPinChanged, masterActive, onAddToParty, mashupSel, mashupPlayBtn)
             : buildClassicSongList(group, filteredSongs, searchField, mashupSel, mashupPlayBtn,
                 onBrowser, onPlaySong, onOpenPaused, libraryService, onToast, onPinChanged,
                 masterActive, onAddToParty, modern);
         VBox.setVgrow(songList, Priority.ALWAYS);
+
+        // El widget (cuadrícula o lista) ya no cambia al entrar/salir de Mashup, así que basta
+        // con redibujar las celdas visibles en vez de repoblar el panel entero.
+        javafx.beans.value.ChangeListener<String> typeListener = (obs, old, t) -> {
+            boolean m = "Mashup".equals(t);
+            mashupBar.setVisible(m); mashupBar.setManaged(m);
+            if (!m) { mashupSel[0] = null; mashupSel[1] = null; mashupPlayBtn[0].setDisable(true); }
+            songList.refresh();
+        };
+        group.typeProperty().addListener(typeListener);
+        panel.getProperties().put("groupDetailTypeListener", typeListener);
 
         if (modern) panel.getChildren().addAll(header, searchRow, mashupBar, songList);
         else        panel.getChildren().addAll(header, sep, searchRow, mashupBar, songList);
@@ -864,8 +942,9 @@ public final class GroupDetailBuilder {
     private static final double GRID_CARD_GAP     = 14;
     private static final double GRID_ROW_HEIGHT   = 236;
 
-    /** Cuadrícula de tarjetas para las canciones de una playlist en diseño moderno (no aplica a
-     *  grupos tipo Mashup, que siguen usando {@link #buildClassicSongList} con sus badges ①/②).
+    /** Cuadrícula de tarjetas para las canciones de una playlist en diseño moderno — incluidos
+     *  los grupos tipo Mashup, donde el click de una tarjeta selecciona (insignia ①/②/○ sobre
+     *  la portada, ver {@code selBadge}) en vez de reproducir directamente.
      *
      * <p>Sigue virtualizada — cada "fila" del {@code ListView} contiene varias tarjetas en
      * horizontal ({@link #cardsPerRowFor}), no una tarjeta por fila, para no perder rendimiento
@@ -879,7 +958,8 @@ public final class GroupDetailBuilder {
                                                        BiConsumer<Song, LibraryGroup> onOpenPaused,
                                                        LibraryService libraryService, Consumer<String> onToast,
                                                        Runnable onPinChanged, ReadOnlyBooleanProperty masterActive,
-                                                       Consumer<Song> onAddToParty) {
+                                                       Consumer<Song> onAddToParty,
+                                                       Song[] mashupSel, Button[] mashupPlayBtn) {
         ObservableList<List<Song>> gridRows = FXCollections.observableArrayList();
         ListView<List<Song>> songList = new ListView<>(gridRows);
         songList.getStyleClass().add("detail-listview");
@@ -913,8 +993,21 @@ public final class GroupDetailBuilder {
             if (n != cardsPerRow[0]) { cardsPerRow[0] = n; rechunk.run(); }
         });
         filteredSongs.addListener((ListChangeListener<Song>) c -> rechunk.run());
-        cardsPerRow[0] = cardsPerRowFor(songList.getWidth());
-        rechunk.run();
+        // Al construirse, songList todavía no está añadida a la escena, así que su ancho real es
+        // 0 — calcular cardsPerRow con eso daría 1 (una columna) y se reconstruiría ENTERA la
+        // cuadrícula de golpe en cuanto el listener de arriba reciba el ancho real (todas las
+        // filas cambian de contenido al pasar de 1 a N columnas). Esa reconstrucción masiva,
+        // ocurriendo justo al abrir la playlist, podía coincidir con el primer click del usuario
+        // y "comerse" ese click (el nodo de la tarjeta se reemplazaba a mitad del gesto de
+        // pulsar-soltar, así que el evento de click nunca llegaba a dispararse del todo — se veía
+        // como si el primer click solo refrescara la pantalla en vez de seleccionar). Si ya se
+        // conoce el ancho real, construir directamente con él; si no (lo normal), dejar que el
+        // propio listener haga la ÚNICA construcción inicial de verdad en cuanto el layout lo
+        // asiente, sin pasar antes por un estado de una sola columna que solo se va a tirar.
+        if (songList.getWidth() > 0) {
+            cardsPerRow[0] = cardsPerRowFor(songList.getWidth());
+            rechunk.run();
+        }
 
         // ── Drag-to-reorder state (misma mecánica que la lista clásica, adaptada a columnas) ──
         Song[]     dragging     = {null};
@@ -944,12 +1037,33 @@ public final class GroupDetailBuilder {
                     }
                     HBox row = new HBox(GRID_CARD_GAP);
                     row.setPadding(new Insets(10, 4, 10, 4));
+                    boolean isMashup = "Mashup".equals(group.getType());
                     for (int i = 0; i < rowSongs.size(); i++) {
                         Song song = rowSongs.get(i);
-                        VBox card = buildSongGridCard(song, group, onBrowser,
-                            () -> { if (!justDragged[0]) onPlaySong.accept(song, group); justDragged[0] = false; },
+                        // En Mashup, el click de la tarjeta selecciona (①/②) en vez de reproducir
+                        // — misma mecánica que el botón de selección de la lista clásica, ver
+                        // detailSongRowMashup — y muestra una insignia con el estado actual.
+                        String selBadge = isMashup
+                            ? (song == mashupSel[0] ? "①" : song == mashupSel[1] ? "②" : "○") : null;
+                        Runnable onPrimary = isMashup
+                            ? () -> {
+                                if (justDragged[0]) { justDragged[0] = false; return; }
+                                // Si la canción sustituida ocupaba el slot ②, esa otra canción
+                                // pierde su insignia — hay que actualizar también su tarjeta.
+                                Song bumped = null;
+                                if      (song == mashupSel[0]) mashupSel[0] = null;
+                                else if (song == mashupSel[1]) mashupSel[1] = null;
+                                else if (mashupSel[0] == null) mashupSel[0] = song;
+                                else { bumped = mashupSel[1]; mashupSel[1] = song; }
+                                mashupPlayBtn[0].setDisable(mashupSel[0] == null || mashupSel[1] == null);
+                                updateMashupBadge(songList, song,
+                                    song == mashupSel[0] ? "①" : song == mashupSel[1] ? "②" : "○");
+                                if (bumped != null && bumped != song) updateMashupBadge(songList, bumped, "○");
+                              }
+                            : () -> { if (!justDragged[0]) onPlaySong.accept(song, group); justDragged[0] = false; };
+                        VBox card = buildSongGridCard(song, group, onBrowser, onPrimary,
                             () -> onOpenPaused.accept(song, group),
-                            libraryService, onToast, onPinChanged, masterActive, onAddToParty);
+                            libraryService, onToast, onPinChanged, masterActive, onAddToParty, selBadge);
                         // Igual que en la lista clásica: si esta tarjeta se reconstruye mientras
                         // se está arrastrando precisamente esa canción, debe seguir "levantada" —
                         // pero también se desliza igual que el resto cuando cambia de columna, en
@@ -1103,6 +1217,35 @@ public final class GroupDetailBuilder {
         return null;
     }
 
+    /** Actualiza la insignia de selección de Mashup directamente sobre el nodo ya renderizado de
+     *  la tarjeta de {@code song}, si está visible ahora mismo — sin pasar por {@code gridRows}
+     *  ni por {@code ListView.refresh()}. Necesario porque el {@code ListCell} interno de JavaFX
+     *  compara la fila nueva con la vieja por {@code .equals()} antes de llamar a
+     *  {@code updateItem}, y aquí SIEMPRE son iguales (la selección de Mashup no cambia qué
+     *  canciones hay en la fila, solo un estado externo) — así que un {@code gridRows.set(i,
+     *  gridRows.get(i))} se descarta en silencio y la tarjeta nunca se redibuja. */
+    private static void updateMashupBadge(ListView<?> songList, Song song, String selBadge) {
+        boolean selA = "①".equals(selBadge), selB = "②".equals(selBadge);
+        for (Node n : songList.lookupAll(".list-cell")) {
+            if (!(n instanceof ListCell<?> cell)) continue;
+            Node cardNode = findCardForSong(cell.getGraphic(), song);
+            if (!(cardNode instanceof VBox card) || card.getChildren().isEmpty()) continue;
+            if (!(card.getChildren().get(0) instanceof StackPane coverStack)) continue;
+            coverStack.getStyleClass().removeAll("song-grid-card-cover-sel-a", "song-grid-card-cover-sel-b");
+            if (selA) coverStack.getStyleClass().add("song-grid-card-cover-sel-a");
+            else if (selB) coverStack.getStyleClass().add("song-grid-card-cover-sel-b");
+            for (Node child : coverStack.getChildren()) {
+                if (child instanceof Button b && b.getStyleClass().contains("song-grid-card-sel-btn")) {
+                    b.setText(selBadge);
+                    b.getStyleClass().removeAll("song-grid-card-sel-btn-active-a", "song-grid-card-sel-btn-active-b");
+                    if (selA) b.getStyleClass().add("song-grid-card-sel-btn-active-a");
+                    else if (selB) b.getStyleClass().add("song-grid-card-sel-btn-active-b");
+                }
+            }
+            return; // solo puede haber una tarjeta visible para esta canción a la vez
+        }
+    }
+
     /** Nº de tarjetas que caben por fila para un ancho de lista dado (mínimo 1). */
     private static int cardsPerRowFor(double listWidth) {
         double available = listWidth - 16; // margen de padding/scrollbar de la lista
@@ -1111,25 +1254,30 @@ public final class GroupDetailBuilder {
 
     /** Tarjeta individual de canción para {@link #buildSongGrid}: portada, título, duración,
      *  pin flotante sobre la portada, y un botón "⋮" con las acciones menos frecuentes (abrir
-     *  pausado, ver en YouTube, añadir a la sala, eliminar) para no saturar una tarjeta pequeña. */
+     *  pausado, ver en YouTube, añadir a la sala, eliminar) para no saturar una tarjeta pequeña.
+     *  En playlists Mashup, {@code selBadge} ("①"/"②"/"○") muestra una insignia de selección
+     *  sobre la portada y {@code onPrimary} selecciona en vez de reproducir. */
     private static VBox buildSongGridCard(Song song, LibraryGroup group, Consumer<String> onBrowser,
-                                          Runnable onPlay, Runnable onOpenPaused,
+                                          Runnable onPrimary, Runnable onOpenPaused,
                                           LibraryService libraryService, Consumer<String> onToast,
                                           Runnable onPinChanged, ReadOnlyBooleanProperty masterActive,
-                                          Consumer<Song> onAddToParty) {
+                                          Consumer<Song> onAddToParty, String selBadge) {
         VBox card = new VBox(6); card.getStyleClass().add("song-grid-card");
         card.setUserData(song); // permite localizar esta tarjeta concreta durante el arrastre
         card.setPrefWidth(GRID_CARD_W); card.setMaxWidth(GRID_CARD_W); card.setMinWidth(GRID_CARD_W);
 
         StackPane coverStack = new StackPane();
         coverStack.setMinSize(GRID_CARD_W, GRID_CARD_W); coverStack.setMaxSize(GRID_CARD_W, GRID_CARD_W);
+        // hasThumb (miniatura real de YouTube) decide si "Ver en YouTube" tiene sentido más abajo;
+        // displayUrl es lo que se PINTA — el icono personalizado si existe, si no la miniatura.
         boolean hasThumb = song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank();
-        if (hasThumb) {
+        String displayUrl = song.getDisplayThumbnailUrl();
+        if (displayUrl != null && !displayUrl.isBlank()) {
             ImageView iv = new ImageView();
             iv.setFitWidth(GRID_CARD_W); iv.setFitHeight(GRID_CARD_W); iv.setPreserveRatio(false);
             Rectangle clip = new Rectangle(GRID_CARD_W, GRID_CARD_W); clip.setArcWidth(14); clip.setArcHeight(14);
             iv.setClip(clip);
-            loadThumbClean(iv, song.getThumbnailUrl(), true);
+            loadThumbClean(iv, displayUrl, true);
             coverStack.getChildren().add(iv);
         } else {
             Region placeholder = new Region(); placeholder.getStyleClass().add("song-grid-card-placeholder");
@@ -1168,6 +1316,22 @@ public final class GroupDetailBuilder {
         StackPane.setAlignment(pinBtn, Pos.TOP_RIGHT); StackPane.setMargin(pinBtn, new Insets(6, 6, 0, 0));
         coverStack.getChildren().add(pinBtn);
 
+        // Insignia de selección de Mashup ("①"/"②"/"○") — solo presente en playlists Mashup
+        // (selBadge viene null en el resto). Un borde de color resalta la portada cuando esta
+        // canción concreta ya forma parte de la selección, igual que el tinte de fondo que
+        // usa la fila clásica equivalente (mashup-row-sel-a/b).
+        if (selBadge != null) {
+            Button selBtn = new Button(selBadge); selBtn.getStyleClass().add("song-grid-card-sel-btn");
+            boolean selA = "①".equals(selBadge), selB = "②".equals(selBadge);
+            if (selA) selBtn.getStyleClass().add("song-grid-card-sel-btn-active-a");
+            else if (selB) selBtn.getStyleClass().add("song-grid-card-sel-btn-active-b");
+            selBtn.setOnAction(e -> onPrimary.run());
+            StackPane.setAlignment(selBtn, Pos.BOTTOM_LEFT); StackPane.setMargin(selBtn, new Insets(0, 0, 6, 6));
+            coverStack.getChildren().add(selBtn);
+            if (selA) coverStack.getStyleClass().add("song-grid-card-cover-sel-a");
+            else if (selB) coverStack.getStyleClass().add("song-grid-card-cover-sel-b");
+        }
+
         Label titleLbl = new Label(song.getTitle()); titleLbl.getStyleClass().add("song-grid-card-title");
         titleLbl.setWrapText(true); titleLbl.setMaxWidth(GRID_CARD_W); titleLbl.setMinHeight(32); titleLbl.setMaxHeight(32);
 
@@ -1201,6 +1365,20 @@ public final class GroupDetailBuilder {
                 MenuItem linkItem = new MenuItem("Ver en YouTube");
                 linkItem.setOnAction(ev -> onBrowser.accept(song.getVideoId()));
                 menu.getItems().add(linkItem);
+            }
+            menu.getItems().add(new SeparatorMenuItem());
+            MenuItem iconItem = new MenuItem(song.getCustomIconUrl() != null
+                ? "Cambiar icono personalizado…" : "Icono personalizado…");
+            iconItem.setOnAction(ev -> pickAndStoreSongIcon(song,
+                moreBtn.getScene() != null ? moreBtn.getScene().getWindow() : null, onToast));
+            menu.getItems().add(iconItem);
+            if (song.getCustomIconUrl() != null) {
+                MenuItem clearIconItem = new MenuItem("Quitar icono personalizado");
+                clearIconItem.setOnAction(ev -> {
+                    song.setCustomIconUrl(null);
+                    onToast.accept("Icono personalizado eliminado");
+                });
+                menu.getItems().add(clearIconItem);
             }
             menu.getItems().add(new SeparatorMenuItem());
             MenuItem removeItem = new MenuItem("Eliminar de esta lista");
@@ -1237,7 +1415,7 @@ public final class GroupDetailBuilder {
                 return;
             }
             if (e.getButton() == MouseButton.MIDDLE) { onOpenPaused.run(); return; }
-            onPlay.run();
+            onPrimary.run();
         });
         hoverLift(card, coverStack);
         return card;
@@ -1258,8 +1436,8 @@ public final class GroupDetailBuilder {
         });
     }
 
-    /** Lista clásica (y modo Mashup incluso en diseño moderno, ver {@link #populateDetailPanel}):
-     *  un {@code ListView<Song>} virtualizado con una fila por canción. */
+    /** Lista clásica (diseño no-moderno, para cualquier tipo de grupo incluido Mashup): un
+     *  {@code ListView<Song>} virtualizado con una fila por canción. */
     private static ListView<Song> buildClassicSongList(LibraryGroup group, FilteredList<Song> filteredSongs,
                                                         TextField searchField, Song[] mashupSel, Button[] mashupPlayBtn,
                                                         Consumer<String> onBrowser,
@@ -1449,8 +1627,8 @@ public final class GroupDetailBuilder {
      *  En modo moderno es cuadrada y con esquinas redondeadas (clip); en clásico, rectangular. */
     private static Node buildRowThumb(Song song, boolean modern) {
         double w = 56, h = modern ? 56 : 32;
-        boolean hasThumb = song.getThumbnailUrl() != null && !song.getThumbnailUrl().isBlank();
-        if (hasThumb) {
+        String displayUrl = song.getDisplayThumbnailUrl();
+        if (displayUrl != null && !displayUrl.isBlank()) {
             ImageView iv = new ImageView(); iv.getStyleClass().add(modern ? "detail-thumb-modern" : "detail-thumb");
             iv.setFitWidth(w); iv.setFitHeight(h); iv.setPreserveRatio(false);
             if (modern) {
@@ -1458,9 +1636,9 @@ public final class GroupDetailBuilder {
                 iv.setClip(clip);
                 // Carga a resolución nativa (no pre-escalada a 56x56) para poder recortar las
                 // bandas de letterbox reales antes de encajarla en el cuadrado — ver applyCleanViewport.
-                loadThumbClean(iv, song.getThumbnailUrl(), true);
+                loadThumbClean(iv, displayUrl, true);
             } else {
-                try { iv.setImage(new Image(song.getThumbnailUrl(), w, h, false, true, true)); } catch (Exception ignored) {}
+                try { iv.setImage(new Image(displayUrl, w, h, false, true, true)); } catch (Exception ignored) {}
             }
             return iv;
         } else {
@@ -1529,6 +1707,7 @@ public final class GroupDetailBuilder {
             menuRef[0].show(checklistBtn, Side.BOTTOM, 0, 0);
         });
         row.getChildren().add(checklistBtn);
+        row.getChildren().add(buildSongIconMenuButton(song, onToast));
 
         // Pin button
         boolean[] pinned = {libraryService.isSongPinned(song.getVideoId())};
@@ -1639,6 +1818,7 @@ public final class GroupDetailBuilder {
             menuRef[0].show(checklistBtn, Side.BOTTOM, 0, 0);
         });
         row.getChildren().add(checklistBtn);
+        row.getChildren().add(buildSongIconMenuButton(song, onToast));
 
         // Pin button
         boolean[] pinnedM = {libraryService.isSongPinned(song.getVideoId())};

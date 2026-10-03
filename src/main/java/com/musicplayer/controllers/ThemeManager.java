@@ -268,11 +268,11 @@ public class ThemeManager {
         boolean anyDynamic = themeVarModes.values().stream().anyMatch(m -> !DYN_STATIC.equals(m));
         if (!anyDynamic) return;
         PlayerInstance pi = focusedPlayerSupplier.get();
-        if (pi == null || !pi.isPlaying || pi.song == null ||
-                pi.song.getThumbnailUrl() == null || pi.song.getThumbnailUrl().isBlank()) {
+        String candidateUrl = pi != null && pi.song != null ? pi.song.getDisplayThumbnailUrl() : null;
+        if (pi == null || !pi.isPlaying || candidateUrl == null || candidateUrl.isBlank()) {
             fadeAllToBase(); return;
         }
-        final String thumbUrl = pi.song.getThumbnailUrl();
+        final String thumbUrl = candidateUrl;
         if (thumbUrl.equals(inFlightThumbUrl)) return; // already extracting this thumbnail
         inFlightThumbUrl = thumbUrl;
         final PlayerInstance captured = pi;

@@ -532,7 +532,7 @@ public final class SettingsPanelBuilder {
             String sizeStr = formatBytes(ab) + (spgB > 0 ? " + " + formatBytes(spgB) + " spg" : "");
 
             Set<String> gids = pathToGroups.getOrDefault(fp, Set.of());
-            rows.add(new DownloadRow(fp, totalBytes, sizeStr, s.getTitle(), s.getThumbnailUrl(),
+            rows.add(new DownloadRow(fp, totalBytes, sizeStr, s.getTitle(), s.getDisplayThumbnailUrl(),
                 UIUtils.normalize(s.getTitle()), idx++, gids));
         }
         return new DownloadScanResult(byPath, allByPath, groupNames, rows);
