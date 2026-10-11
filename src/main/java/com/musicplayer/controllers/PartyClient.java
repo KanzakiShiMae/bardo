@@ -9,6 +9,7 @@ import javafx.application.Platform;
 import java.io.*;
 import java.net.Socket;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Cliente TCP que conecta a un {@link PartyServer} remoto.
@@ -222,7 +223,19 @@ class PartyClient {
                     if (isReconnectAttempt) { isReconnectAttempt = false; Platform.runLater(callbacks::onReconnected); }
                     else Platform.runLater(callbacks::onAppearanceAccepted);
                 }
-                case "appearanceRejected" -> { String r = msg.get("reason").getAsString(); Platform.runLater(() -> callbacks.onAppearanceRejected(r)); }
+                case "appearanceRejected" -> {
+                    String r = msg.get("reason").getAsString();
+                    // Si esto llega durante un intento de RECONEXIÓN (reclamando el avatar/color
+                    // de antes), significa que la ventana de gracia del servidor expiró mientras
+                    // estábamos sin conexión y otro listener se quedó con esa apariencia — antes
+                    // esto dejaba al cliente colgado en "reconectando" para siempre, porque solo
+                    // "appearanceAccepted" limpiaba isReconnectAttempt/llamaba a onReconnected().
+                    // La conexión TCP en sí está bien — se avisa igualmente como reconectado para
+                    // soltar esa pantalla, y se delega en onAppearanceRejected para que la UI haga
+                    // que el usuario elija una apariencia nueva.
+                    if (isReconnectAttempt) { isReconnectAttempt = false; Platform.runLater(callbacks::onReconnected); }
+                    Platform.runLater(() -> callbacks.onAppearanceRejected(r));
+                }
                 case "track"  -> handleTrack(msg);
                 case "open"   -> { String vid = msg.get("videoId").getAsString(); boolean hid = msg.has("hidden") && msg.get("hidden").getAsBoolean(); Platform.runLater(() -> callbacks.onOpen(vid, hid)); }
                 case "play"   -> { String vid = msg.get("videoId").getAsString(); long p = msg.get("positionMs").getAsLong(); Platform.runLater(() -> callbacks.onPlay(vid, p)); }
@@ -257,7 +270,14 @@ class PartyClient {
                 case "roomClosed"  -> { running = false; fatalStop = true; Platform.runLater(() -> callbacks.onRoomClosed()); }
                 case "kick"        -> { running = false; fatalStop = true; Platform.runLater(() -> callbacks.onKicked()); }
                 case "ban"         -> { running = false; fatalStop = true; Platform.runLater(() -> callbacks.onBanned()); }
-                case "redownload"  -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onRedownload(vid)); }
+                case "redownload"  -> {
+                    String vid = msg.get("videoId").getAsString();
+                    // El Master pidió explícitamente volver a descargar esta canción — hay que
+                    // olvidar que ya se pidió antes para que el "track" que sigue a este mensaje
+                    // (ver PartyServer.broadcastRedownload) no se descarte por duplicado.
+                    requestedDownloads.remove(vid);
+                    Platform.runLater(() -> callbacks.onRedownload(vid));
+                }
                 case "removeTrack" -> { String vid = msg.get("videoId").getAsString(); Platform.runLater(() -> callbacks.onRemoveTrack(vid)); }
                 case "chat" -> {
                     String n = msg.get("name").getAsString(); String em = msg.has("emoji") ? msg.get("emoji").getAsString() : "bxs-music";
@@ -295,17 +315,49 @@ class PartyClient {
         } catch (Exception ignored) {}
     }
 
+    /** videoId de cualquier canción para la que ya se ha lanzado (o terminado) una descarga en
+     *  esta sesión del cliente — ver el comentario en {@link #handleTrack}. */
+    private final java.util.Set<String> requestedDownloads = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     private void handleTrack(JsonObject msg) {
         String videoId      = msg.get("videoId").getAsString();
         String title        = msg.get("title").getAsString();
         String thumbnailUrl = msg.has("thumbnailUrl") ? msg.get("thumbnailUrl").getAsString() : "";
         boolean hidden      = msg.has("hidden") && msg.get("hidden").getAsBoolean();
         String displayTitle = hidden ? "???" : title;
-        Platform.runLater(() -> callbacks.onTrackLoading(displayTitle));
         Platform.runLater(() -> callbacks.onTrackAnnounced(videoId, title, hidden));
-        send("downloading", j -> j.addProperty("videoId", videoId));
 
-        Song song = new Song(videoId, title, "", "—", thumbnailUrl, "");
+        // El servidor reenvía TODO el historial de "sharedTracks" tras cada "hello" — tanto al
+        // unirse como en cada reconexión (ver PartyServer.onMessage) — para que quien se una
+        // tarde se ponga al día. Sin esta comprobación, cada reconexión relanzaba yt-dlp para
+        // CADA canción ya compartida en la sala, aunque ya estuviera descargada o incluso
+        // todavía descargándose de un intento anterior — con salas largas (muchas canciones) y
+        // listeners con conexiones inestables (varias reconexiones seguidas), esto podía lanzar
+        // una ráfaga de peticiones repetidas a YouTube en poco tiempo, suficiente para disparar
+        // el bloqueo anti-bot de YouTube para esa IP — tras lo cual CUALQUIER descarga posterior
+        // fallaba ("siempre en rojo"), no solo las repetidas. Una vez pedida una descarga para un
+        // videoId en esta sesión del cliente, no se vuelve a pedir — si ya terminó con éxito el
+        // archivo sigue en disco (downloadAudio lo detecta solo), y si seguía en curso, ese
+        // intento original sigue su camino y acabará notificando el resultado igual.
+        if (!requestedDownloads.add(videoId)) return;
+
+        Platform.runLater(() -> callbacks.onTrackLoading(displayTitle));
+        send("downloading", j -> j.addProperty("videoId", videoId));
+        attemptDownload(new Song(videoId, title, "", "—", thumbnailUrl, ""), 1);
+    }
+
+    /** Número máximo de intentos (el primero + reintentos) antes de dar una descarga por fallida
+     *  definitivamente. */
+    private static final int DOWNLOAD_MAX_ATTEMPTS = 3;
+    /** Espera antes del intento N — crece con cada reintento (4s, luego 9s) para no insistir
+     *  inmediatamente si YouTube está aplicando un bloqueo anti-bot temporal por IP. */
+    private static final long DOWNLOAD_RETRY_BASE_MS = 4_000;
+
+    /** Descarga {@code song}, reintentando con espera creciente si falla — un fallo puntual
+     *  (bloqueo anti-bot temporal de YouTube, corte de red breve…) ya no deja la canción en rojo
+     *  para siempre a la primera, que era lo que pasaba antes de este método. */
+    private void attemptDownload(Song song, int attempt) {
+        String videoId = song.getVideoId();
         // Reporta el % de descarga al Master (para que vea el progreso de sus listeners),
         // sin exponerlo en la UI de este propio listener. Se limita el envío a cambios de
         // al menos 2 puntos para no saturar el socket con las decenas de ticks de yt-dlp.
@@ -322,9 +374,16 @@ class PartyClient {
                 Platform.runLater(() -> callbacks.onTrackReady(song, path));
             })
             .exceptionally(ex -> {
-                // Fallo al descargar ESTA canción (vídeo no disponible, error de red puntual…) —
-                // se notifica al Master y se muestra al propio listener, pero NO se sale de la sala:
-                // el resto de canciones y la conexión siguen funcionando con normalidad.
+                if (attempt < DOWNLOAD_MAX_ATTEMPTS) {
+                    long delay = DOWNLOAD_RETRY_BASE_MS * attempt;
+                    CompletableFuture.delayedExecutor(delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+                        .execute(() -> attemptDownload(song, attempt + 1));
+                    return null;
+                }
+                // Fallo al descargar ESTA canción tras agotar los reintentos (vídeo no
+                // disponible, error persistente…) — se notifica al Master y se muestra al
+                // propio listener, pero NO se sale de la sala: el resto de canciones y la
+                // conexión siguen funcionando con normalidad.
                 send("error", j -> { j.addProperty("message", ex.getMessage()); j.addProperty("videoId", videoId); });
                 Platform.runLater(() -> callbacks.onTrackError(videoId, ex.getMessage()));
                 return null;

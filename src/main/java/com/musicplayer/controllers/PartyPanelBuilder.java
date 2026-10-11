@@ -1239,8 +1239,19 @@ class PartyPanelBuilder {
                 showListenerPanel();
             }
             @Override public void onAppearanceRejected(String reason) {
+                if (appearanceErrorLbl != null) {
+                    appearanceErrorLbl.setText(reason); appearanceErrorLbl.setVisible(true); appearanceErrorLbl.setManaged(true);
+                    if (appearanceConfirmBtn != null) appearanceConfirmBtn.setDisable(false);
+                    return;
+                }
+                // appearanceErrorLbl es null cuando esto llega FUERA del formulario de apariencia
+                // (p. ej. tras una reconexión que no pudo recuperar el avatar/color de antes —
+                // ver PartyClient — y el listener ya estaba viendo el panel normal de reproducción).
+                // Antes esto no hacía nada visible; ahora se le lleva al formulario para que elija
+                // una apariencia nueva, con un aviso de por qué.
+                mc.showToast("No se pudo recuperar tu apariencia anterior: " + reason);
+                showAppearanceForm();
                 if (appearanceErrorLbl != null) { appearanceErrorLbl.setText(reason); appearanceErrorLbl.setVisible(true); appearanceErrorLbl.setManaged(true); }
-                if (appearanceConfirmBtn != null) appearanceConfirmBtn.setDisable(false);
             }
             @Override public void onRejected(String reason) {
                 partyClient = null;

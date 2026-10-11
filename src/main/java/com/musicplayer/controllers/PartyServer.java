@@ -50,8 +50,14 @@ class PartyServer {
     private volatile boolean running;
 
     // ── Reconexión de listeners ──────────────────────────────────────────────
-    /** Cuánto se espera a que un listener con la conexión caída vuelva antes de darlo por perdido. */
-    private static final long RECONNECT_GRACE_MS = 45_000;
+    /** Cuánto se espera a que un listener con la conexión caída vuelva antes de darlo por perdido.
+     *  Cada intento del cliente (ver PartyClient.RECONNECT_DELAY_MS/socket connect timeout) puede
+     *  tardar hasta ~13s si falla (10s de timeout de conexión + 3s de espera antes de reintentar) —
+     *  45s solo daba para 3-4 intentos, insuficiente para listeners con conexiones internacionales
+     *  inestables (p. ej. a través de un túnel bore con más latencia/pérdida de paquetes), que
+     *  agotaban la ventana de gracia antes de lograr reconectar — ver también el fix en
+     *  PartyClient para cuando la apariencia ya no se pudo recuperar a tiempo.  */
+    private static final long RECONNECT_GRACE_MS = 90_000;
     /** name -> token de la ventana de gracia activa; se invalida (se quita) si reconecta a tiempo. */
     private final Map<String, Object> reconnectTokens = new ConcurrentHashMap<>();
 
