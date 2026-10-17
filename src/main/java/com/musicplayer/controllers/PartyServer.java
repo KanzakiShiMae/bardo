@@ -34,6 +34,9 @@ class PartyServer {
         void onListenerReconnected(String name);
         /** Ping (ms de ida y vuelta) que {@code name} acaba de medir contra este servidor. */
         void onListenerPing(String name, int ms);
+        /** Estado de reproducción propio que {@code name} acaba de reportar (posición, pausa,
+         *  volumen) para la canción {@code videoId} — reportado en cada ciclo de ping del cliente. */
+        void onListenerPlaybackStatus(String name, String videoId, long positionMs, boolean playing, double volume);
         void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle);
         void onReaction(String name, String emoji, String color, String reaction, String songRefVideoId, String songRefTitle);
     }
@@ -470,6 +473,15 @@ class PartyServer {
                     pong.addProperty("ts", msg.get("ts").getAsLong());
                     handler.send(gson.toJson(pong));
                 }
+                // Reutiliza este mismo ciclo (cada PartyClient.PING_INTERVAL_MS, ~4s) para
+                // reenviar también un snapshot de sincronización — así el listener se corrige
+                // solo con el tiempo (posición, apertura de la canción activa si no la tenía,
+                // marcadores A/B, volumen) sin depender de que cada mensaje individual
+                // "play"/"pause"/"seek"/etc. le haya llegado bien; cubre también el caso de
+                // perder alguno de esos mensajes durante un corte de red breve que no llegó a
+                // disparar una reconexión completa. PartyPanelBuilder.applySync aplica un umbral
+                // de posición para no forzar un seek en cada tick solo por variación de ping.
+                handler.send(gson.toJson(buildSyncMessage()));
                 return;
             }
 
@@ -478,6 +490,21 @@ class PartyServer {
                     int ms = msg.get("ms").getAsInt();
                     String pname = handler.name;
                     Platform.runLater(() -> callbacks.onListenerPing(pname, ms));
+                }
+                return;
+            }
+
+            if ("status".equals(type)) {
+                // Mismo ciclo de ping del cliente (ver PartyClient.startPingLoop) — reporta su
+                // propia posición/pausa/volumen para que el Master los muestre en vivo.
+                if (handler.name != null && msg.has("videoId") && msg.has("positionMs")
+                        && msg.has("playing") && msg.has("volume")) {
+                    String svid     = msg.get("videoId").getAsString();
+                    long   spos     = msg.get("positionMs").getAsLong();
+                    boolean splaying = msg.get("playing").getAsBoolean();
+                    double svol     = msg.get("volume").getAsDouble();
+                    String pname    = handler.name;
+                    Platform.runLater(() -> callbacks.onListenerPlaybackStatus(pname, svid, spos, splaying, svol));
                 }
                 return;
             }

@@ -1010,6 +1010,24 @@
     -fx-border-width: 1 1 2 1; -fx-border-radius: 8 8 0 0;
 }
 .tab-btn-active.tab-btn-playing .tab-label { -fx-text-fill: derive(bardo-accent, -40%); -fx-font-weight: bold; }
+/* Pestaña del Master retransmitiendo a la sala Party — borde en el color secundario, para
+   distinguirla a simple vista de cualquier otra pestaña, esté o no en reproducción. */
+.tab-btn-party-master {
+    -fx-border-color: bardo-accent2;
+    -fx-border-width: 2;
+    -fx-border-radius: 8 8 0 0;
+}
+.tab-btn-active.tab-btn-party-master {
+    -fx-border-color: bardo-accent2 bardo-accent2 bardo-bg bardo-accent2;
+}
+.tab-btn-playing.tab-btn-party-master {
+    -fx-border-color: bardo-accent2 bardo-accent2 bardo-accent bardo-accent2;
+    -fx-border-width: 2 2 3 2;
+}
+.tab-btn-active.tab-btn-playing.tab-btn-party-master {
+    -fx-border-color: bardo-accent2 bardo-accent2 bardo-accent bardo-accent2;
+    -fx-border-width: 2 2 3 2;
+}
 .tab-close-btn {
     -fx-background-color: transparent; -fx-text-fill: derive(bardo-text-muted, 10%);
     -fx-font-size: 14px; -fx-padding: 0 1; -fx-cursor: hand;

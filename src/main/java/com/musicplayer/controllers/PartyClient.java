@@ -24,6 +24,10 @@ class PartyClient {
     record SyncState(String videoId, boolean hidden, boolean playing, long positionMs, double volume,
                       boolean looping, boolean loopActive, double loopInPct, double loopOutPct) {}
 
+    /** Snapshot del propio estado de reproducción de este listener, para que el Master pueda
+     *  mostrarlo en vivo (ver {@link #setStatusSupplier}). */
+    record PlaybackStatus(String videoId, long positionMs, boolean playing, double volume) {}
+
     interface Callbacks {
         void onConnected();
         /** La conexión se perdió inesperadamente; el cliente reintentará solo, sin salir de la sala. */
@@ -86,6 +90,10 @@ class PartyClient {
     /** true mientras se procesan los mensajes de un intento de reconexión (para no reabrir la UI de unión). */
     private volatile boolean isReconnectAttempt = false;
 
+    /** Proveedor del estado de reproducción actual de este listener (posición/pausa/volumen),
+     *  consultado en cada ciclo de ping — ver {@link #setStatusSupplier} y {@link #startPingLoop}. */
+    private volatile java.util.function.Supplier<PlaybackStatus> statusSupplier;
+
     private static final long RECONNECT_DELAY_MS = 3_000;
     private static final long PING_INTERVAL_MS   = 4_000;
 
@@ -105,14 +113,36 @@ class PartyClient {
         startPingLoop();
     }
 
+    /** Fija de dónde sacar el estado de reproducción propio (posición/pausa/volumen) que se
+     *  reporta al Master en cada ciclo de ping — ver {@link #startPingLoop}. {@code null} (o que
+     *  el propio supplier devuelva {@code null}, p.ej. sin canción abierta todavía) hace que ese
+     *  ciclo no reporte nada, sin dejar de enviar el "ping" en sí. */
+    void setStatusSupplier(java.util.function.Supplier<PlaybackStatus> supplier) {
+        this.statusSupplier = supplier;
+    }
+
     /** Envía un "ping" cada {@link #PING_INTERVAL_MS} mientras haya conexión activa; sigue vivo
-     *  a través de reconexiones (se limita a no enviar nada mientras {@code running} sea falso). */
+     *  a través de reconexiones (se limita a no enviar nada mientras {@code running} sea falso).
+     *  Reutiliza este mismo ciclo para reportar también, al Master, el estado de reproducción
+     *  propio de este listener — así el Master puede mostrar en vivo (en el panel de su
+     *  reproductor) la posición/pausa/volumen de cada oyente sin un temporizador aparte. */
     private void startPingLoop() {
         Thread t = new Thread(() -> {
             while (!stopRequested) {
                 try { Thread.sleep(PING_INTERVAL_MS); }
                 catch (InterruptedException ie) { Thread.currentThread().interrupt(); return; }
-                if (running) send("ping", j -> j.addProperty("ts", System.currentTimeMillis()));
+                if (!running) continue;
+                send("ping", j -> j.addProperty("ts", System.currentTimeMillis()));
+                java.util.function.Supplier<PlaybackStatus> sup = statusSupplier;
+                PlaybackStatus st = sup != null ? sup.get() : null;
+                if (st != null) {
+                    send("status", j -> {
+                        j.addProperty("videoId", st.videoId());
+                        j.addProperty("positionMs", st.positionMs());
+                        j.addProperty("playing", st.playing());
+                        j.addProperty("volume", st.volume());
+                    });
+                }
             }
         }, "party-ping");
         t.setDaemon(true);

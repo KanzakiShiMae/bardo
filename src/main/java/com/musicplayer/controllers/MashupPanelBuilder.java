@@ -5,6 +5,7 @@ import org.kordamp.ikonli.javafx.FontIcon;
 import org.kordamp.ikonli.boxicons.BoxiconsRegular;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.canvas.Canvas;
 import javafx.scene.control.*;
 import javafx.scene.image.*;
 import javafx.scene.layout.*;
@@ -52,6 +53,11 @@ public final class MashupPanelBuilder {
         HBox songsRow = new HBox(32, colA, vs, colB);
         songsRow.setAlignment(Pos.CENTER);
 
+        // Waveform (solo de la canción ①, el reproductor primario) — mismo estilo que el
+        // panel normal de reproducción.
+        Canvas waveCanvas = new Canvas(340, 64);
+        waveCanvas.getStyleClass().add("wave-canvas");
+
         // Volume + crossfade row
         int initA = (int) Math.round(piA.volume * 100);
         int initB = (int) Math.round(piB.volume * 100);
@@ -71,18 +77,20 @@ public final class MashupPanelBuilder {
         Label lblB = new Label("②"); lblB.setStyle("-fx-font-size:15px; -fx-text-fill:#6ba3d6;");
 
         sliderA.valueProperty().addListener((obs, old, val) -> {
-            if (piA.mashupXfadeAnim != null) return;
             int pct = (int) Math.round(val.doubleValue());
+            // El % se refleja siempre, también mientras el crossfade anima el slider — solo se
+            // evita tocar el volumen real mientras tanto (ese Timeline ya lo controla él mismo).
+            pctA.setText(pct + "%");
+            if (piA.mashupXfadeAnim != null) return;
             piA.volume = pct / 100.0;
             if (piA.mediaPlayer != null) piA.mediaPlayer.setVolume(piA.volume);
-            pctA.setText(pct + "%");
         });
         sliderB.valueProperty().addListener((obs, old, val) -> {
-            if (piA.mashupXfadeAnim != null) return;
             int pct = (int) Math.round(val.doubleValue());
+            pctB.setText(pct + "%");
+            if (piA.mashupXfadeAnim != null) return;
             piB.volume = pct / 100.0;
             if (piB.mediaPlayer != null) piB.mediaPlayer.setVolume(piB.volume);
-            pctB.setText(pct + "%");
         });
 
         HBox volRow = new HBox(10, lblA, sliderA, pctA, xBtn, pctB, sliderB, lblB);
@@ -116,9 +124,10 @@ public final class MashupPanelBuilder {
         HBox timeRow = new HBox(14, elapsed, progress, total);
         timeRow.setAlignment(Pos.CENTER);
 
-        panel.getChildren().addAll(header, songsRow, volRow, ppBtn, timeRow);
+        panel.getChildren().addAll(header, songsRow, waveCanvas, volRow, ppBtn, timeRow);
 
         piA.panel              = panel;
+        piA.panelWaveCanvas    = waveCanvas;
         piA.panelPlayPause     = ppBtn;
         piA.panelProgress      = progress;
         piA.panelElapsed       = elapsed;

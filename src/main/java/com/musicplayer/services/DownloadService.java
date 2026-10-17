@@ -168,12 +168,28 @@ public class DownloadService {
         return "(sin salida de yt-dlp)";
     }
 
-    /** Busca un archivo cuyo nombre empiece por videoId+"." en el directorio dado. */
+    /** Sufijos que yt-dlp usa para archivos TEMPORALES/incompletos (descarga interrumpida a
+     *  medias, reanudable) — nunca hay que confundirlos con el archivo final ya completo. */
+    private static final String[] INCOMPLETE_SUFFIXES = { ".part", ".ytdl" };
+
+    /** Busca un archivo YA COMPLETO (ni parcial de yt-dlp ni vacío) cuyo nombre empiece por
+     *  videoId+"." en el directorio dado.
+     *
+     * <p>Antes aceptaba cualquier archivo con ese prefijo, incluidos los {@code .part} que
+     * yt-dlp deja cuando una descarga se interrumpe (corte de red, cerrar la app a medias…) —
+     * la siguiente vez que se pedía esta canción, ese archivo parcial se confundía con uno ya
+     * descargado: se daba por listo al instante (sin descargar nada de verdad) pero el archivo
+     * estaba truncado, así que fallaba solo al REPRODUCIRLO, no al "descargarlo". */
     private Path findDownloaded(Path dir, String videoId) {
         if (!Files.isDirectory(dir)) return null;
         try (var stream = Files.list(dir)) {
             return stream
-                .filter(p -> p.getFileName().toString().startsWith(videoId + "."))
+                .filter(p -> {
+                    String name = p.getFileName().toString();
+                    if (!name.startsWith(videoId + ".")) return false;
+                    for (String suffix : INCOMPLETE_SUFFIXES) if (name.endsWith(suffix)) return false;
+                    try { return Files.size(p) > 0; } catch (IOException e) { return false; }
+                })
                 .findFirst()
                 .orElse(null);
         } catch (IOException e) {

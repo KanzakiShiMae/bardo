@@ -785,6 +785,9 @@ public class MainController implements Initializable {
             ? findPlayerInstance(tab.id) : null;
         boolean playing = tabPi != null && tabPi.isPlaying;
         UIUtils.toggleStyleClass(btn, "tab-btn-playing", playing);
+        // Borde en el color secundario: distingue a simple vista cuál es la pestaña que el
+        // Master está retransmitiendo ahora mismo a los listeners de la sala Party.
+        UIUtils.toggleStyleClass(btn, "tab-btn-party-master", tabPi != null && tabPi.isMasterPartyPlayer);
 
         Label lbl = (Label) btn.getChildren().get(0);
         lbl.setText(tab.title);
@@ -1079,6 +1082,18 @@ public class MainController implements Initializable {
         activateTab(openTabs.get(next));
     }
 
+    /** Muestra el motivo REAL del fallo de reproducción (tipo + mensaje de la
+     *  {@code MediaException} que expone JavaFX) en vez de un "no se puede reproducir"
+     *  genérico — antes {@code setOnError} descartaba esos detalles, así que no había forma de
+     *  distinguir "archivo corrupto" de "códec no disponible en esta máquina" de cualquier otra
+     *  causa cuando un usuario reportaba el fallo sin poder enviar sus logs. */
+    private void reportMediaError(javafx.scene.media.MediaPlayer mp, java.io.File file) {
+        javafx.scene.media.MediaException ex = mp != null ? mp.getError() : null;
+        String detail = ex != null ? (ex.getType() + ": " + ex.getMessage()) : "motivo desconocido";
+        showToast("Error al reproducir " + file.getName() + " — " + detail);
+        System.err.println("[MediaPlayer] Error reproduciendo " + file.getAbsolutePath() + " — " + detail);
+    }
+
     /**
      * Carga y reproduce {@code song} en la instancia {@code pi}, reemplazando
      * cualquier {@code MediaPlayer} anterior. Si la canción no es local, abre
@@ -1148,7 +1163,7 @@ public class MainController implements Initializable {
                         partyPanelBuilder.masterBroadcastPlay(pi.song.getVideoId(), (long) seekTo.toMillis());
                 } else { onSongEnded(pi); }
             }));
-            pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
+            pi.mediaPlayer.setOnError(() -> reportMediaError(pi.mediaPlayer, file));
 
             // ── Audio spectrum → forma de onda en tiempo real ────────────────
             final int BANDS = 64;
@@ -1260,16 +1275,75 @@ public class MainController implements Initializable {
         PlayerInstance piB = piA.mashupPartner;
         if (piA.mediaPlayer == null) return;
         if (!piA.isPlaying) {
+            if (piA.fadeOutAnim != null) { piA.fadeOutAnim.stop(); piA.fadeOutAnim = null; }
+            if (piB != null && piB.fadeOutAnim != null) { piB.fadeOutAnim.stop(); piB.fadeOutAnim = null; }
+
+            // Todo el montaje (play() de las dos pistas + construir los dos Timeline) se hace
+            // ANTES de arrancar cualquier fundido — si el montaje de piB se intercala a mitad del
+            // fundido de piA (como pasaba antes), le roba tiempo al hilo de JavaFX justo en el
+            // tramo crítico de los primeros ~50ms, y ese tramo es el único que suena realmente
+            // suave; el resto del fundido se recupera a saltos. Confirmado con logs: el tramo
+            // suave de Mashup cubría solo ~9% del volumen objetivo antes de ponerse a saltos,
+            // frente a ~29% en el reproductor normal (de una sola pista, sin este montaje extra)
+            // — por eso el de Mashup se oía "a golpe" y el normal no, con el mismo mecanismo de
+            // fundido.
+            piA.mediaPlayer.setVolume(0);
             piA.mediaPlayer.play(); piA.isPlaying = true;
-            if (piB != null && piB.mediaPlayer != null) { piB.mediaPlayer.play(); piB.isPlaying = true; }
-            if (piA == focusedPlayer) addGlowEffect();
+            piA.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(300),
+                new KeyValue(piA.mediaPlayer.volumeProperty(), piA.volume, Interpolator.EASE_OUT)));
+            piA.fadeOutAnim.setOnFinished(ev -> piA.fadeOutAnim = null);
+
+            if (piB != null && piB.mediaPlayer != null) {
+                piB.mediaPlayer.setVolume(0);
+                piB.mediaPlayer.play(); piB.isPlaying = true;
+                piB.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(300),
+                    new KeyValue(piB.mediaPlayer.volumeProperty(), piB.volume, Interpolator.EASE_OUT)));
+                piB.fadeOutAnim.setOnFinished(ev -> piB.fadeOutAnim = null);
+            }
+
+            // Arrancar los dos fundidos seguidos, sin nada más entremedias.
+            piA.fadeOutAnim.play();
+            if (piB != null && piB.fadeOutAnim != null) piB.fadeOutAnim.play();
+
+            // El trabajo de UI pesado va el último, después de que los dos Timeline ya estén en
+            // marcha — así no compite por el hilo justo cuando empieza el fundido.
+            if (piA == focusedPlayer) { addGlowEffect(); themeManager.updateDynamicColors(); }
             updatePlayPauseButton(); rebuildTabBar();
         } else {
-            piA.mediaPlayer.pause(); piA.isPlaying = false;
-            if (piB != null && piB.mediaPlayer != null) { piB.mediaPlayer.pause(); piB.isPlaying = false; }
+            fadeOutAndPauseMashup(piA, piB);
+        }
+    }
+
+    /** Igual que {@link #fadeOutAndPause}, pero pausa a la vez las dos canciones del Mashup —
+     *  cada una se desvanece con su propio volumen configurado como destino de bajada. */
+    private void fadeOutAndPauseMashup(PlayerInstance piA, PlayerInstance piB) {
+        piA.isPlaying = false;
+        if (piB != null) piB.isPlaying = false;
+        if (piA == focusedPlayer) {
+            removeGlowEffect(); updatePlayPauseButton();
+        } else if (piA.panelPlayPause != null) {
+            ico(piA.panelPlayPause, BoxiconsRegular.PLAY, 24, true);
+        }
+
+        if (piA.fadeOutAnim != null) piA.fadeOutAnim.stop();
+        piA.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(700),
+            new KeyValue(piA.mediaPlayer.volumeProperty(), 0.0, Interpolator.EASE_IN)));
+        piA.fadeOutAnim.setOnFinished(ev -> {
+            piA.mediaPlayer.pause();
             startWaveDecay(piA);
-            if (piA == focusedPlayer) removeGlowEffect();
-            updatePlayPauseButton(); rebuildTabBar();
+            piA.fadeOutAnim = null;
+            applyVolumesToAll();
+            rebuildTabBar();
+            if (piA == focusedPlayer || focusedPlayer == null) themeManager.updateDynamicColors();
+        });
+        piA.fadeOutAnim.play();
+
+        if (piB != null && piB.mediaPlayer != null) {
+            if (piB.fadeOutAnim != null) piB.fadeOutAnim.stop();
+            piB.fadeOutAnim = new Timeline(new KeyFrame(Duration.millis(700),
+                new KeyValue(piB.mediaPlayer.volumeProperty(), 0.0, Interpolator.EASE_IN)));
+            piB.fadeOutAnim.setOnFinished(ev -> { piB.mediaPlayer.pause(); piB.fadeOutAnim = null; });
+            piB.fadeOutAnim.play();
         }
     }
 
@@ -1279,13 +1353,27 @@ public class MainController implements Initializable {
         if (piA.mashupXfadeAnim != null) { piA.mashupXfadeAnim.stop(); piA.mashupXfadeAnim = null; }
         double fromA = piA.mediaPlayer.getVolume(), fromB = piB.mediaPlayer.getVolume();
         double toA = fromB, toB = fromA;
+
+        java.util.List<javafx.animation.KeyValue> startValues = new java.util.ArrayList<>(java.util.List.of(
+            new javafx.animation.KeyValue(piA.mediaPlayer.volumeProperty(), fromA),
+            new javafx.animation.KeyValue(piB.mediaPlayer.volumeProperty(), fromB)));
+        java.util.List<javafx.animation.KeyValue> endValues = new java.util.ArrayList<>(java.util.List.of(
+            new javafx.animation.KeyValue(piA.mediaPlayer.volumeProperty(), toA, javafx.animation.Interpolator.EASE_BOTH),
+            new javafx.animation.KeyValue(piB.mediaPlayer.volumeProperty(), toB, javafx.animation.Interpolator.EASE_BOTH)));
+        // Las barras de volumen acompañan el mismo fundido que el audio, en vez de saltar de
+        // golpe al valor final al terminar — se ve el intercambio ocurrir en tiempo real.
+        if (piA.panelVolumeSlider != null) {
+            startValues.add(new javafx.animation.KeyValue(piA.panelVolumeSlider.valueProperty(), fromA * 100));
+            endValues.add(new javafx.animation.KeyValue(piA.panelVolumeSlider.valueProperty(), toA * 100, javafx.animation.Interpolator.EASE_BOTH));
+        }
+        if (piB.panelVolumeSlider != null) {
+            startValues.add(new javafx.animation.KeyValue(piB.panelVolumeSlider.valueProperty(), fromB * 100));
+            endValues.add(new javafx.animation.KeyValue(piB.panelVolumeSlider.valueProperty(), toB * 100, javafx.animation.Interpolator.EASE_BOTH));
+        }
+
         piA.mashupXfadeAnim = new javafx.animation.Timeline(
-            new javafx.animation.KeyFrame(Duration.ZERO,
-                new javafx.animation.KeyValue(piA.mediaPlayer.volumeProperty(), fromA),
-                new javafx.animation.KeyValue(piB.mediaPlayer.volumeProperty(), fromB)),
-            new javafx.animation.KeyFrame(Duration.millis(1500),
-                new javafx.animation.KeyValue(piA.mediaPlayer.volumeProperty(), toA, javafx.animation.Interpolator.EASE_BOTH),
-                new javafx.animation.KeyValue(piB.mediaPlayer.volumeProperty(), toB, javafx.animation.Interpolator.EASE_BOTH))
+            new javafx.animation.KeyFrame(Duration.ZERO, startValues.toArray(new javafx.animation.KeyValue[0])),
+            new javafx.animation.KeyFrame(Duration.millis(1500), endValues.toArray(new javafx.animation.KeyValue[0]))
         );
         piA.mashupXfadeAnim.setOnFinished(ev -> {
             piA.mashupXfadeAnim = null;
@@ -1928,7 +2016,7 @@ public class MainController implements Initializable {
         String tabId = "mashup:" + System.currentTimeMillis();
 
         PlayerInstance piA = new PlayerInstance(tabId);
-        piA.volume = 1.0;
+        piA.volume = volumeSlider.getValue() / 100.0;
         piA.looping = true;
         piA.queue.add(songA);
 
@@ -1970,7 +2058,7 @@ public class MainController implements Initializable {
                     if (pi.mediaPlayer != null) { pi.mediaPlayer.seek(Duration.ZERO); pi.mediaPlayer.play(); }
                 })
             );
-            pi.mediaPlayer.setOnError(() -> showToast("Error al reproducir: " + file.getName()));
+            pi.mediaPlayer.setOnError(() -> reportMediaError(pi.mediaPlayer, file));
             media.durationProperty().addListener((obs, old, dur) -> {
                 if (dur != null && dur.greaterThan(Duration.ZERO) && !dur.equals(Duration.UNKNOWN)) {
                     String totalStr = UIUtils.formatTime((int) dur.toSeconds());
@@ -1980,6 +2068,37 @@ public class MainController implements Initializable {
                     });
                 }
             });
+
+            // ── Audio spectrum → forma de onda en tiempo real — el panel Mashup solo
+            // tiene un canvas de wave (el de la canción ①, piA — ver MashupPanelBuilder), así
+            // que piB (sin panelWaveCanvas asignado) simplemente no pasa por aquí.
+            if (pi.panelWaveCanvas != null) {
+                final int BANDS = 64;
+                pi.waveSmoothed = new float[BANDS];
+                pi.wavePeaks    = new float[BANDS];
+                final float[] smoothed = pi.waveSmoothed;
+                final boolean[] pending = {false};
+                pi.mediaPlayer.setAudioSpectrumNumBands(BANDS);
+                pi.mediaPlayer.setAudioSpectrumInterval(1.0 / 30);
+                pi.mediaPlayer.setAudioSpectrumListener((ts, dur2, mags, phases) -> {
+                    for (int i = 0; i < BANDS; i++) {
+                        float raw    = Math.max(0f, (mags[i] + 60f) / 60f);
+                        float boost  = 1.0f + (float) i / (BANDS - 1) * 2.0f;
+                        float target = Math.min(1.0f, raw * boost);
+                        smoothed[i] = smoothed[i] * 0.55f + target * 0.45f;
+                    }
+                    if (!pending[0]) {
+                        pending[0] = true;
+                        Platform.runLater(() -> {
+                            if (pi.panel != null && pi.panel.isVisible())
+                                drawWaveCanvas(pi.panelWaveCanvas, smoothed, pi.wavePeaks);
+                            if (pi == focusedPlayer) drawWaveCanvas(miniWaveCanvas, smoothed, miniWavePeaks);
+                            pending[0] = false;
+                        });
+                    }
+                });
+            }
+
             pi.mediaPlayer.play();
             pi.isPlaying = true;
         } catch (Exception e) {
@@ -2884,6 +3003,9 @@ public class MainController implements Initializable {
         pi.volume = volumeSlider.getValue() / 100.0;
         pi.queue.add(song);
         buildPanel(pi); activePlayers.add(pi); loadSong(pi, song);
+        // pi.song ya está asignado tras loadSong — aquí, y no en buildPanel (genérico para
+        // cualquier tipo de reproductor), es donde toca enganchar la lista en vivo de listeners.
+        if (partyPanelBuilder != null) partyPanelBuilder.attachListenerStatusBox(pi);
         return pi;
     }
 

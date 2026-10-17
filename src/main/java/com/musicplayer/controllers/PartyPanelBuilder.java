@@ -143,6 +143,19 @@ class PartyPanelBuilder {
     /** Último ping (ms) reportado por cada listener. */
     private final Map<String, Integer> listenerPings = new HashMap<>();
 
+    /** Último estado de reproducción (posición/pausa/volumen) reportado por cada listener, para
+     *  la canción que tiene abierta — ver {@code onListenerPlaybackStatus} y la lista en vivo del
+     *  panel del reproductor del Master ({@link #attachListenerStatusBox}). */
+    private record ListenerPlayback(String videoId, long positionMs, boolean playing, double volume, long receivedAtMs) {}
+    private final Map<String, ListenerPlayback> listenerPlayback = new HashMap<>();
+    /** videoId -> contenedor de filas de listeners, dentro del panel del reproductor del Master. */
+    private final Map<String, VBox> listenerStatusBoxes = new HashMap<>();
+    /** videoId -> PlayerInstance del Master para esa pestaña (para comparar su posición en vivo). */
+    private final Map<String, PlayerInstance> masterTrackPlayers = new HashMap<>();
+    /** videoId -> temporizador que refresca su caja de listeners cada segundo (extrapola la
+     *  posición entre reportes de ~4s, para que se vea "en vivo" sin esperar al próximo ping). */
+    private final Map<String, Timeline> listenerStatusTickers = new HashMap<>();
+
     // ── Estado Master (extras) ────────────────────────────────────────────────
     private VBox masterMemberListBox;
     private VBox masterChatBox;
@@ -304,6 +317,11 @@ class PartyPanelBuilder {
         connectedListenerNames.clear();
         reconnectingListeners.clear();
         listenerPings.clear();
+        listenerPlayback.clear();
+        listenerStatusBoxes.clear();
+        masterTrackPlayers.clear();
+        listenerStatusTickers.values().forEach(Timeline::stop);
+        listenerStatusTickers.clear();
 
         try {
             partyServer = new PartyServer(requestedPort, new PartyServer.Callbacks() {
@@ -326,9 +344,11 @@ class PartyPanelBuilder {
                     songStatus.values().forEach(m -> m.remove(name));
                     songProgress.values().forEach(m -> m.remove(name));
                     listenerPings.remove(name);
+                    listenerPlayback.remove(name);
                     SoundPlayer.play("leave");
                     updateMasterMemberList();
                     refreshSongList();
+                    listenerStatusBoxes.keySet().forEach(PartyPanelBuilder.this::refreshListenerStatusBox);
                 }
                 @Override public void onListenerVideoStatus(String name, String videoId, PartyServer.ListenerStatus status) {
                     LinkedHashMap<String, PartyServer.ListenerStatus> statuses = songStatus.get(videoId);
@@ -354,6 +374,7 @@ class PartyPanelBuilder {
                     }
 
                     refreshSongList();
+                    refreshListenerStatusBox(videoId);
                 }
                 @Override public void onListenerVideoProgress(String name, String videoId, int percent) {
                     songProgress.computeIfAbsent(videoId, k -> new LinkedHashMap<>()).put(name, percent);
@@ -370,6 +391,12 @@ class PartyPanelBuilder {
                 @Override public void onListenerPing(String name, int ms) {
                     listenerPings.put(name, ms);
                     updateMasterMemberList();
+                    ListenerPlayback lp = listenerPlayback.get(name);
+                    if (lp != null) refreshListenerStatusBox(lp.videoId());
+                }
+                @Override public void onListenerPlaybackStatus(String name, String videoId, long positionMs, boolean playing, double volume) {
+                    listenerPlayback.put(name, new ListenerPlayback(videoId, positionMs, playing, volume, System.currentTimeMillis()));
+                    refreshListenerStatusBox(videoId);
                 }
                 @Override public void onChatMessage(String name, String emoji, String color, String text, String songRefVideoId, String songRefTitle) {
                     PartyPanelBuilder.this.addMasterChatMessage(name, emoji, color, text, songRefVideoId, songRefTitle);
@@ -797,7 +824,6 @@ class PartyPanelBuilder {
             "-fx-border-color: rgba(162,155,254,0.22); -fx-border-radius: 10; -fx-border-width: 1;"
         );
         codeSection.setMaxWidth(Double.MAX_VALUE);
-        HBox.setHgrow(codeSection, Priority.ALWAYS);
 
         // ── Sección derecha: listeners ────────────────────────────────────────
         Label membersHeader = new Label("LISTENERS");
@@ -825,13 +851,8 @@ class PartyPanelBuilder {
             "-fx-border-color: rgba(255,255,255,0.07); -fx-border-radius: 10; -fx-border-width: 1;"
         );
         membersSection.setMaxWidth(Double.MAX_VALUE);
-        HBox.setHgrow(membersSection, Priority.ALWAYS);
 
-        // Fila superior: código a la izquierda, listeners a la derecha
-        HBox topRow = new HBox(10, codeSection, membersSection);
-        topRow.setFillHeight(true);
-
-        // ── Panel de canciones (mitad izquierda del SplitPane) ────────────────
+        // ── Panel de canciones ──────────────────────────────────────────────────
         Label songsHeader = new Label("CANCIONES EN SALA");
         songsHeader.getStyleClass().add("sidebar-section-label");
 
@@ -863,9 +884,13 @@ class PartyPanelBuilder {
 
         VBox songsPane = new VBox(8, songsHeaderRow, songsScroll);
         songsPane.setPadding(new Insets(10, 12, 8, 12));
-        songsPane.setMinWidth(140);
+        songsPane.setStyle(
+            "-fx-background-color: rgba(255,255,255,0.03);" +
+            "-fx-background-radius: 10;" +
+            "-fx-border-color: rgba(255,255,255,0.07); -fx-border-radius: 10; -fx-border-width: 1;"
+        );
 
-        // ── Panel de chat (mitad derecha del SplitPane) ───────────────────────
+        // ── Panel de chat ────────────────────────────────────────────────────
         Label chatHeader = new Label("CHAT");
         chatHeader.getStyleClass().add("sidebar-section-label");
 
@@ -901,14 +926,34 @@ class PartyPanelBuilder {
 
         VBox chatPane = new VBox(8, chatHeader, masterChatScrollPane, masterInputRow);
         chatPane.setPadding(new Insets(10, 12, 10, 12));
-        chatPane.setMinWidth(140);
+        chatPane.setStyle(
+            "-fx-background-color: rgba(255,255,255,0.03);" +
+            "-fx-background-radius: 10;" +
+            "-fx-border-color: rgba(255,255,255,0.07); -fx-border-radius: 10; -fx-border-width: 1;"
+        );
+        // Umbral mínimo de colapso: deja sitio para la cabecera y la fila de escribir, pero ya
+        // no obliga a reservar hueco para varios mensajes — es la caja que cede cuando se
+        // arrastra el cuadro de listeners hacia abajo (comparten columna, ver rightCol abajo).
+        chatPane.setMinHeight(90);
 
-        // ── SplitPane horizontal: canciones | chat ────────────────────────────
-        SplitPane splitPane = new SplitPane(songsPane, chatPane);
-        splitPane.setOrientation(javafx.geometry.Orientation.HORIZONTAL);
-        splitPane.setDividerPositions(0.50);
-        splitPane.setMinHeight(200);
-        VBox.setVgrow(splitPane, Priority.ALWAYS);
+        // ── Columna izquierda: código de sala arriba, canciones abajo ───────────
+        SplitPane leftCol = new SplitPane(codeSection, songsPane);
+        leftCol.setOrientation(javafx.geometry.Orientation.VERTICAL);
+        leftCol.setDividerPositions(0.3);
+
+        // ── Columna derecha: listeners arriba, chat abajo ───────────────────────
+        // Al compartir columna con listeners (y no con canciones, que vive en la columna de al
+        // lado), es SIEMPRE el chat el que cede espacio al agrandar el cuadro de listeners —
+        // canciones nunca se ve afectada por este divisor, al no ser su hermana de columna.
+        SplitPane rightCol = new SplitPane(membersSection, chatPane);
+        rightCol.setOrientation(javafx.geometry.Orientation.VERTICAL);
+        rightCol.setDividerPositions(0.3);
+
+        // ── Fila principal: columna izquierda | columna derecha ─────────────────
+        SplitPane vSplit = new SplitPane(leftCol, rightCol);
+        vSplit.setOrientation(javafx.geometry.Orientation.HORIZONTAL);
+        vSplit.setDividerPositions(0.5);
+        VBox.setVgrow(vSplit, Priority.ALWAYS);
 
         // ── Cerrar sala ───────────────────────────────────────────────────────
         Button closeBtn = new Button("  Cerrar sala");
@@ -935,12 +980,16 @@ class PartyPanelBuilder {
             connectedListenerNames.clear();
             reconnectingListeners.clear();
             listenerPings.clear();
+            listenerPlayback.clear();
+            listenerStatusBoxes.clear();
+            masterTrackPlayers.clear();
+            listenerStatusTickers.values().forEach(Timeline::stop);
+            listenerStatusTickers.clear();
             showLanding();
         });
 
         // ── Ensamblado ────────────────────────────────────────────────────────
-        VBox content = new VBox(10, titleLbl, topRow, splitPane, closeBtn);
-        VBox.setVgrow(splitPane, Priority.ALWAYS);
+        VBox content = new VBox(10, titleLbl, vSplit, closeBtn);
         VBox.setVgrow(content, Priority.ALWAYS);
         root.getChildren().setAll(content);
     }
@@ -1462,6 +1511,16 @@ class PartyPanelBuilder {
         PartyClient newClient = new PartyClient(host, port, nickname, downloadService, guarded);
         selfHolder[0] = newClient;
         partyClient = newClient;
+        // Reporta, en cada ciclo de ping, el estado de reproducción de la canción activa de este
+        // listener — para que el Master la muestre en vivo en su propio panel. Sin canción activa
+        // (recién unido, o la cerró) el supplier devuelve null y ese ciclo no manda "status".
+        newClient.setStatusSupplier(() -> {
+            if (currentListenerVideoId == null) return null;
+            PlayerInstance pi = partyPlayers.get(currentListenerVideoId);
+            if (pi == null || pi.mediaPlayer == null) return null;
+            return new PartyClient.PlaybackStatus(currentListenerVideoId,
+                (long) pi.mediaPlayer.getCurrentTime().toMillis(), pi.isPlaying, pi.volume);
+        });
 
         Runnable cleanup = this::deletePartyDownloads;
         partyCleanupHook = new Thread(cleanup, "party-cleanup");
@@ -1471,9 +1530,17 @@ class PartyPanelBuilder {
 
     /**
      * Aplica un snapshot de reproducción del Master: abre el reproductor si aún no existe (caso de
-     * unión/reconexión tardía, cuando el "open" en vivo ya pasó y nunca nos llegó), y sincroniza
-     * posición, volumen, marcadores A/B y estado de pausa/reproducción para quedar exactamente
-     * igual que el Master y el resto de la sala.
+     * unión/reconexión tardía, o de un resync periódico que llega mientras la canción activa
+     * seguía cerrada en este listener), y sincroniza posición, volumen, marcadores A/B y estado de
+     * pausa/reproducción para quedar igual que el Master y el resto de la sala.
+     *
+     * <p>Se llama tanto al unirse/reconectar (un único "sync" tras el "hello") como, desde esta
+     * ronda, en cada ciclo de ping del listener (~4s, ver {@code PartyServer} al manejar "ping") —
+     * así que el reposicionamiento de la canción YA ABIERTA usa un umbral de 1000ms: sin él, la
+     * pequeña variación de ida y vuelta de cada ping forzaría un {@code seek} constante, audible
+     * como un micro-corte, sin aportar nada (la posición ya es prácticamente correcta). Al abrir
+     * la canción por primera vez, o ante un cambio real de pausa/reproducción, sí se posiciona
+     * siempre exactamente, sin umbral.
      */
     private void applySync(PartyClient.SyncState sync) {
         String videoId = sync.videoId();
@@ -1482,6 +1549,7 @@ class PartyPanelBuilder {
         if (song == null) return; // aún descargando — se reintentará desde onTrackReady
 
         PlayerInstance pi = partyPlayers.get(videoId);
+        boolean freshlyOpened = pi == null;
         if (pi == null) {
             if (sync.hidden()) hiddenListenerTracks.add(videoId); else hiddenListenerTracks.remove(videoId);
             currentListenerVideoId = videoId;
@@ -1498,13 +1566,25 @@ class PartyPanelBuilder {
         pi.loopOutPct = sync.loopOutPct();
         if (pi.spectroRedraw != null) pi.spectroRedraw.run();
 
-        pi.mediaPlayer.seek(javafx.util.Duration.millis(sync.positionMs()));
-        if (sync.playing()) {
-            mc.partyPlay(pi);
-            if (listenerSyncLbl != null) listenerSyncLbl.setText("▶ Reproduciendo");
+        if (freshlyOpened || sync.playing() != pi.isPlaying) {
+            // Apertura inicial, o cambio real de pausa/reproducción: se posiciona siempre, sin
+            // umbral, y se sigue el camino normal de partyPlay/partyPause (que ya traen su propio
+            // fundido de volumen — no se duplica aquí).
+            pi.mediaPlayer.seek(javafx.util.Duration.millis(sync.positionMs()));
+            if (sync.playing()) {
+                mc.partyPlay(pi);
+                if (listenerSyncLbl != null) listenerSyncLbl.setText("▶ Reproduciendo");
+            } else {
+                mc.partyPause(pi, sync.positionMs());
+                if (listenerSyncLbl != null) listenerSyncLbl.setText("⏸ Pausado");
+            }
         } else {
-            mc.partyPause(pi, sync.positionMs());
-            if (listenerSyncLbl != null) listenerSyncLbl.setText("⏸ Pausado");
+            // Resync periódico sin cambio de estado — ver umbral de 1000ms en el Javadoc de
+            // arriba; evita además repetir el fundido que partyPlay/partyPause hacen SIEMPRE,
+            // que en cada tick de ping se notaría como un parpadeo de volumen.
+            long currentPos = (long) pi.mediaPlayer.getCurrentTime().toMillis();
+            if (Math.abs(currentPos - sync.positionMs()) >= 1000)
+                pi.mediaPlayer.seek(javafx.util.Duration.millis(sync.positionMs()));
         }
     }
 
@@ -1910,6 +1990,141 @@ class PartyPanelBuilder {
 
     void masterBroadcastCloseTrack(String videoId) {
         if (partyServer != null) partyServer.broadcastCloseTrack(videoId);
+        Timeline ticker = listenerStatusTickers.remove(videoId);
+        if (ticker != null) ticker.stop();
+        listenerStatusBoxes.remove(videoId);
+        masterTrackPlayers.remove(videoId);
+    }
+
+    // ── Master: lista de listeners en vivo dentro del panel del reproductor ───
+
+    /** Umbral de posición "ligeramente alejada" (amarillo) respecto al Master. */
+    private static final long LISTENER_POS_WARN_MS = 1_500;
+    /** Umbral de posición "muy alejada" (rojo) respecto al Master. */
+    private static final long LISTENER_POS_BAD_MS   = 4_000;
+
+    /** Construye y engancha, dentro del panel ya construido de {@code pi} (debe ser una pestaña
+     *  Party del Master, {@code pi.isMasterPartyPlayer}), la lista en vivo de listeners que están
+     *  escuchando esa canción: ping, posición (coloreada según su distancia a la posición real del
+     *  Master), si están en play/pausa, y su volumen. Se refresca sola con cada ping/estado nuevo
+     *  que llega del servidor, y además cada segundo (para que la posición "avance" entre un
+     *  reporte y el siguiente, en vez de quedarse congelada ~4s). Llamar una vez, justo después de
+     *  construir el panel (ver {@code MainController.buildPanel}). */
+    void attachListenerStatusBox(PlayerInstance pi) {
+        if (pi.song == null || pi.panel == null) return;
+        String videoId = pi.song.getVideoId();
+        masterTrackPlayers.put(videoId, pi);
+
+        Label header = new Label("  ESCUCHANDO CONTIGO");
+        header.getStyleClass().add("sidebar-section-label");
+        FontIcon headerIcon = new FontIcon(BoxiconsRegular.HEADPHONE); headerIcon.setIconSize(12); headerIcon.getStyleClass().add("icon-secondary");
+        header.setGraphic(headerIcon);
+
+        VBox rowsBox = new VBox(6);
+        listenerStatusBoxes.put(videoId, rowsBox);
+
+        VBox box = new VBox(8, header, rowsBox);
+        box.setPrefWidth(400);
+        box.setMaxWidth(440);
+        box.setPadding(new Insets(12, 14, 12, 14));
+        box.setStyle("-fx-background-color: rgba(255,255,255,0.035); -fx-background-radius: 12;" +
+            "-fx-border-color: rgba(255,255,255,0.06); -fx-border-radius: 12; -fx-border-width: 1;");
+
+        pi.panel.getChildren().add(box);
+        refreshListenerStatusBox(videoId);
+
+        Timeline ticker = new Timeline(new KeyFrame(Duration.seconds(1), ev -> refreshListenerStatusBox(videoId)));
+        ticker.setCycleCount(Animation.INDEFINITE);
+        ticker.play();
+        listenerStatusTickers.put(videoId, ticker);
+    }
+
+    /** Reconstruye las filas de la caja de listeners de {@code videoId} (si esa pestaña sigue
+     *  abierta) a partir del estado actual — ver {@link #attachListenerStatusBox}. */
+    private void refreshListenerStatusBox(String videoId) {
+        VBox rowsBox = listenerStatusBoxes.get(videoId);
+        if (rowsBox == null) return;
+        PlayerInstance masterPi = masterTrackPlayers.get(videoId);
+
+        rowsBox.getChildren().clear();
+
+        // Solo listeners con esta canción lista (ya descargada y abierta) — los que siguen
+        // descargando o no la tienen compartida no "están escuchando" todavía.
+        LinkedHashMap<String, PartyServer.ListenerStatus> statuses = songStatus.get(videoId);
+        List<String> ready = new ArrayList<>();
+        if (statuses != null) {
+            for (String n : connectedListenerNames)
+                if (statuses.get(n) == PartyServer.ListenerStatus.READY) ready.add(n);
+        }
+
+        if (ready.isEmpty()) {
+            Label ph = new Label("Nadie la está escuchando todavía");
+            ph.getStyleClass().add("greeting-sub");
+            ph.setStyle("-fx-font-size: 11px; -fx-text-fill: #8a7a9a;");
+            rowsBox.getChildren().add(ph);
+            return;
+        }
+
+        long masterPosMs = (masterPi != null && masterPi.mediaPlayer != null)
+            ? (long) masterPi.mediaPlayer.getCurrentTime().toMillis() : 0;
+        long now = System.currentTimeMillis();
+
+        for (String name : ready) {
+            String emoji = listenerEmojis.get(name);
+            String color = listenerColors.get(name);
+            FontIcon avatar = avatarFi(emoji != null ? emoji : "bxs-music", 14, color != null ? color : "#a090b0");
+
+            Label nameLbl = new Label("  " + name);
+            nameLbl.setStyle("-fx-font-size: 12px; -fx-font-weight: bold; -fx-text-fill: "
+                + (color != null ? color : "#a090b0") + ";");
+            nameLbl.setMinWidth(90);
+
+            Integer ping = listenerPings.get(name);
+            Label pingLbl = new Label(ping != null ? ping + " ms" : "– ms");
+            String pingColor = ping == null ? "#636e72" : ping < 100 ? "#00b894" : ping < 250 ? "#fdcb6e" : "#e17055";
+            pingLbl.setStyle("-fx-font-size: 10px; -fx-text-fill: " + pingColor + ";");
+            pingLbl.setTooltip(new Tooltip("Ping"));
+            pingLbl.setMinWidth(46);
+
+            ListenerPlayback lp = listenerPlayback.get(name);
+            FontIcon stateIco;
+            Label posLbl;
+            Label volLbl;
+            if (lp != null && videoId.equals(lp.videoId())) {
+                long estimatedPos = lp.positionMs() + (lp.playing() ? Math.max(0, now - lp.receivedAtMs()) : 0);
+                long diff = Math.abs(estimatedPos - masterPosMs);
+                String posColor = diff >= LISTENER_POS_BAD_MS ? "#e17055"
+                    : diff >= LISTENER_POS_WARN_MS ? "#fdcb6e" : "#b2bec3";
+                posLbl = new Label(UIUtils.formatTime((int) (estimatedPos / 1000)));
+                posLbl.setStyle("-fx-font-size: 11px; -fx-font-family: monospace; -fx-text-fill: " + posColor + ";");
+
+                stateIco = new FontIcon(lp.playing() ? BoxiconsRegular.PLAY : BoxiconsRegular.PAUSE);
+                stateIco.setIconSize(14);
+                stateIco.setIconColor(javafx.scene.paint.Color.web(lp.playing() ? "#00b894" : "#a090b0"));
+                Tooltip.install(stateIco, new Tooltip(lp.playing() ? "Reproduciendo" : "En pausa"));
+
+                volLbl = new Label((int) Math.round(lp.volume() * 100) + "%");
+                volLbl.setGraphic(IkonUtil.duotone(BoxiconsSolid.VOLUME_FULL, BoxiconsRegular.VOLUME_FULL, 11));
+                volLbl.setStyle("-fx-font-size: 10px; -fx-text-fill: #8a7a9a;");
+            } else {
+                posLbl = new Label("–:––");
+                posLbl.setStyle("-fx-font-size: 11px; -fx-font-family: monospace; -fx-text-fill: #636e72;");
+                stateIco = new FontIcon(BoxiconsRegular.TIME);
+                stateIco.setIconSize(14);
+                stateIco.setIconColor(javafx.scene.paint.Color.web("#636e72"));
+                Tooltip.install(stateIco, new Tooltip("Esperando datos…"));
+                volLbl = new Label("–");
+                volLbl.setStyle("-fx-font-size: 10px; -fx-text-fill: #636e72;");
+            }
+            posLbl.setMinWidth(40);
+
+            Region spacer = new Region(); HBox.setHgrow(spacer, Priority.ALWAYS);
+
+            HBox row = new HBox(8, avatar, nameLbl, spacer, pingLbl, posLbl, stateIco, volLbl);
+            row.setAlignment(Pos.CENTER_LEFT);
+            row.setStyle("-fx-background-color: rgba(255,255,255,0.04); -fx-background-radius: 6; -fx-padding: 4 8;");
+            rowsBox.getChildren().add(row);
+        }
     }
 
     // ── Listener: cierre de pestañas de reproductor ───────────────────────────

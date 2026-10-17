@@ -514,7 +514,19 @@ public final class GroupDetailBuilder {
         } else {
             row.getChildren().addAll(meta, typeCombo, chevron, removeBtn);
         }
-        row.setOnMouseClicked(e -> { if (!(e.getTarget() instanceof Button) && !(e.getTarget() instanceof ComboBox)) onClick.run(); });
+        // Ver el comentario en buildSongGridCard: detección de click a mano (pulsar+soltar), no
+        // setOnMouseClicked.
+        double[] sectionPressScene = {0, 0};
+        row.setOnMousePressed(e -> {
+            if (!(e.getTarget() instanceof Button) && !(e.getTarget() instanceof ComboBox)) {
+                sectionPressScene[0] = e.getSceneX(); sectionPressScene[1] = e.getSceneY();
+            }
+        });
+        row.setOnMouseReleased(e -> {
+            if (e.getTarget() instanceof Button || e.getTarget() instanceof ComboBox) return;
+            if (Math.hypot(e.getSceneX() - sectionPressScene[0], e.getSceneY() - sectionPressScene[1]) > 8) return;
+            onClick.run();
+        });
         card.getChildren().add(row);
         return card;
     }
@@ -578,13 +590,38 @@ public final class GroupDetailBuilder {
         bottomRow.setAlignment(Pos.CENTER_LEFT);
 
         card.getChildren().addAll(coverStack, nameLbl, cntLbl, bottomRow);
-        card.setOnMouseClicked(e -> { if (!(e.getTarget() instanceof Button) && !(e.getTarget() instanceof ComboBox)) onClick.run(); });
+        // Ver el comentario en buildSongGridCard: detección de click a mano (pulsar+soltar), no
+        // setOnMouseClicked.
+        double[] modernCardPressScene = {0, 0};
+        card.setOnMousePressed(e -> {
+            if (!(e.getTarget() instanceof Button) && !(e.getTarget() instanceof ComboBox)) {
+                modernCardPressScene[0] = e.getSceneX(); modernCardPressScene[1] = e.getSceneY();
+            }
+        });
+        card.setOnMouseReleased(e -> {
+            if (e.getTarget() instanceof Button || e.getTarget() instanceof ComboBox) return;
+            if (Math.hypot(e.getSceneX() - modernCardPressScene[0], e.getSceneY() - modernCardPressScene[1]) > 8) return;
+            onClick.run();
+        });
 
+        TranslateTransition[] currentLift = {null};
         card.setOnMouseEntered(e -> {
-            TranslateTransition tt = new TranslateTransition(Duration.millis(120), card); tt.setToY(-4); tt.play();
+            if (currentLift[0] != null) currentLift[0].stop();
+            TranslateTransition tt = new TranslateTransition(Duration.millis(120), card); tt.setToY(-4);
+            currentLift[0] = tt; tt.play();
         });
         card.setOnMouseExited(e -> {
-            TranslateTransition tt = new TranslateTransition(Duration.millis(120), card); tt.setToY(0); tt.play();
+            if (currentLift[0] != null) currentLift[0].stop();
+            TranslateTransition tt = new TranslateTransition(Duration.millis(120), card); tt.setToY(0);
+            currentLift[0] = tt; tt.play();
+        });
+        // Mismo fix que hoverLift (más abajo, para las tarjetas de canción): parar la animación
+        // en seco al empezar a pulsar evita que el nodo se mueva bajo el cursor durante el gesto
+        // de click, que parecía impedir que JavaFX sintetizara el MOUSE_CLICKED la primera vez
+        // que se pulsaba sobre una tarjeta recién sobrevolada.
+        card.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            if (currentLift[0] != null) { currentLift[0].stop(); currentLift[0] = null; }
+            card.setTranslateY(-4);
         });
         return card;
     }
@@ -690,7 +727,9 @@ public final class GroupDetailBuilder {
         refreshBg.accept(true);
         ListChangeListener<Song> songsListener = c -> refreshBg.accept(false);
         ChangeListener<String> bannerListener  = (o, ov, nv) -> refreshBg.accept(true);
-        ChangeListener<String> iconListener    = (o, ov, nv) -> refreshBg.accept(true);
+        ChangeListener<String> iconListener    = (o, ov, nv) -> {
+            refreshBg.accept(true);
+        };
         group.getSongs().addListener(songsListener);
         group.customBannerUrlProperty().addListener(bannerListener);
         group.customIconUrlProperty().addListener(iconListener);
@@ -965,6 +1004,7 @@ public final class GroupDetailBuilder {
         songList.getStyleClass().add("detail-listview");
         songList.setFixedCellSize(GRID_ROW_HEIGHT);
         songList.setFocusTraversable(false);
+        disableSelection(songList);
 
         int[] cardsPerRow = {1};
         Runnable rechunk = () -> {
@@ -1060,7 +1100,10 @@ public final class GroupDetailBuilder {
                                     song == mashupSel[0] ? "①" : song == mashupSel[1] ? "②" : "○");
                                 if (bumped != null && bumped != song) updateMashupBadge(songList, bumped, "○");
                               }
-                            : () -> { if (!justDragged[0]) onPlaySong.accept(song, group); justDragged[0] = false; };
+                            : () -> {
+                                if (!justDragged[0]) onPlaySong.accept(song, group);
+                                justDragged[0] = false;
+                              };
                         VBox card = buildSongGridCard(song, group, onBrowser, onPrimary,
                             () -> onOpenPaused.accept(song, group),
                             libraryService, onToast, onPinChanged, masterActive, onAddToParty, selBadge);
@@ -1111,6 +1154,7 @@ public final class GroupDetailBuilder {
                     setGraphic(row);
                 }
             };
+            cell.setFocusTraversable(false);
 
             cell.setOnMousePressed(e -> {
                 if (e.getTarget() instanceof Button || e.getTarget() instanceof ComboBox || cell.isEmpty()) return;
@@ -1124,7 +1168,8 @@ public final class GroupDetailBuilder {
             cell.setOnMouseDragged(e -> {
                 if (dragging[0] == null) return;
                 if (!dragActive[0]) {
-                    if (Math.abs(e.getScreenY() - pressScreenY[0]) < 8) return;
+                    double delta = Math.abs(e.getScreenY() - pressScreenY[0]);
+                    if (delta < 8) return;
                     dragActive[0] = true; justDragged[0] = false; songList.setCursor(Cursor.CLOSED_HAND);
                     // Levantamiento suave y elegante al empezar a arrastrar de verdad.
                     Node draggedCard = findCardForSong(cell.getGraphic(), dragging[0]);
@@ -1204,6 +1249,35 @@ public final class GroupDetailBuilder {
         });
 
         return songList;
+    }
+
+    /** Causa real del "primer click de cada fila no se registra, hace falta un segundo"
+     *  (confirmado con logs de depuración: pulsar una fila nunca antes seleccionada hace que
+     *  JavaFX reconstruya esa {@code ListCell} — con tarjetas completamente nuevas — a mitad del
+     *  propio gesto de pulsar/soltar, por el comportamiento de selección/foco que trae
+     *  {@code ListView} de serie; como el MOUSE_RELEASED iba dirigido a la tarjeta VIEJA, que ya
+     *  no está en la escena, el evento se pierde sin más). Esta app no usa en ningún sitio la
+     *  selección nativa de {@code ListView} (el estado de selección de Mashup se gestiona aparte,
+     *  a mano, con {@code mashupSel[]}) — así que aquí se sustituye por un modelo que no hace
+     *  nada, para que pulsar una fila nunca dispare esa reconstrucción. */
+    private static <T> void disableSelection(ListView<T> listView) {
+        listView.setSelectionModel(new MultipleSelectionModel<T>() {
+            @Override public ObservableList<Integer> getSelectedIndices() { return FXCollections.emptyObservableList(); }
+            @Override public ObservableList<T> getSelectedItems() { return FXCollections.emptyObservableList(); }
+            @Override public void selectIndices(int index, int... indices) {}
+            @Override public void selectAll() {}
+            @Override public void selectFirst() {}
+            @Override public void selectLast() {}
+            @Override public void clearAndSelect(int index) {}
+            @Override public void select(int index) {}
+            @Override public void select(T obj) {}
+            @Override public void clearSelection(int index) {}
+            @Override public void clearSelection() {}
+            @Override public boolean isSelected(int index) { return false; }
+            @Override public boolean isEmpty() { return true; }
+            @Override public void selectPrevious() {}
+            @Override public void selectNext() {}
+        });
     }
 
     /** Busca, dentro de una fila de la cuadrícula, la tarjeta que corresponde a {@code song} —
@@ -1406,8 +1480,24 @@ public final class GroupDetailBuilder {
         metaRow.setAlignment(Pos.CENTER_LEFT);
 
         card.getChildren().addAll(coverStack, titleLbl, metaRow);
-        card.setOnMouseClicked(e -> {
+        // NO se usa setOnMouseClicked: confirmado con logs de depuración que, la primera vez en
+        // toda la sesión que el usuario pulsa y suelta sobre una tarjeta (con MOUSE_PRESSED y
+        // MOUSE_RELEASED disparándose con total normalidad, sin ningún arrastre real), JavaFX no
+        // llega a sintetizar el evento MOUSE_CLICKED — un fallo puntual de su generador de clicks
+        // interno, no de esta app, que solo ocurre esa primera vez y nunca más en la misma
+        // ejecución. Como pulsar y soltar SÍ son 100% fiables (lo demuestran esos mismos logs),
+        // el "click" se detecta aquí a mano a partir de ambos, sin depender en absoluto de que
+        // JavaFX decida sintetizarlo.
+        double[] pressScene = {0, 0};
+        card.setOnMousePressed(e -> {
             if (e.getTarget() instanceof Button) return;
+            pressScene[0] = e.getSceneX(); pressScene[1] = e.getSceneY();
+        });
+        card.setOnMouseReleased(e -> {
+            if (e.getTarget() instanceof Button) return;
+            // Mismo umbral que el arrastre de fila (ver cell.setOnMouseDragged): si se movió de
+            // más entre pulsar y soltar, no se trata como un click limpio.
+            if (Math.hypot(e.getSceneX() - pressScene[0], e.getSceneY() - pressScene[1]) > 8) return;
             // Click derecho añade directamente a la cola de la party, pero solo si hay una sala
             // activa como Master — de lo contrario esta funcionalidad no existe (sin fallback).
             if (e.getButton() == MouseButton.SECONDARY) {
@@ -1415,7 +1505,7 @@ public final class GroupDetailBuilder {
                 return;
             }
             if (e.getButton() == MouseButton.MIDDLE) { onOpenPaused.run(); return; }
-            onPrimary.run();
+            if (e.getButton() == MouseButton.PRIMARY) onPrimary.run();
         });
         hoverLift(card, coverStack);
         return card;
@@ -1426,13 +1516,32 @@ public final class GroupDetailBuilder {
      *  portada — resalta la tarjeta bajo el cursor sin ser un efecto pesado de renderizar
      *  (solo dos propiedades animadas, nada por fotograma más allá de la propia transición). */
     private static void hoverLift(Node card, Node cover) {
+        TranslateTransition[] current = {null};
         card.setOnMouseEntered(e -> {
-            TranslateTransition tt = new TranslateTransition(Duration.millis(140), card); tt.setToY(-4); tt.play();
+            if (current[0] != null) current[0].stop();
+            TranslateTransition tt = new TranslateTransition(Duration.millis(140), card); tt.setToY(-4);
+            current[0] = tt; tt.play();
             cover.getStyleClass().add("song-grid-card-cover-hover");
         });
         card.setOnMouseExited(e -> {
-            TranslateTransition tt = new TranslateTransition(Duration.millis(140), card); tt.setToY(0); tt.play();
+            if (current[0] != null) current[0].stop();
+            TranslateTransition tt = new TranslateTransition(Duration.millis(140), card); tt.setToY(0);
+            current[0] = tt; tt.play();
             cover.getStyleClass().remove("song-grid-card-cover-hover");
+        });
+        // Causa real del "primer click no se registra, hace falta un segundo": si el usuario
+        // pulsa justo nada más pasar el ratón por primera vez sobre la tarjeta (lo normal), el
+        // press/release puede ocurrir MIENTRAS la animación de arriba sigue en marcha — confirmado
+        // con logs de depuración que MOUSE_PRESSED y MOUSE_RELEASED se disparan con normalidad y
+        // SIN arrastre real según la lógica propia de la app, pero JavaFX no llega a sintetizar
+        // ningún MOUSE_CLICKED en ese caso concreto — su propio cálculo interno de "¿fue un click
+        // o un arrastre?" parece verse afectado por que el nodo pulsado se esté moviendo bajo el
+        // cursor durante el gesto. Al empezar a pulsar, se para la animación en seco y se fija la
+        // posición final de una vez (ya se está pulsando, así que el hover está activo) — el nodo
+        // queda inmóvil durante todo el gesto de click, sea cual sea la causa interna exacta.
+        card.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, e -> {
+            if (current[0] != null) { current[0].stop(); current[0] = null; }
+            card.setTranslateY(-4);
         });
     }
 
@@ -1451,6 +1560,7 @@ public final class GroupDetailBuilder {
         songList.getStyleClass().add("detail-listview");
         songList.setFixedCellSize(cellSize);
         songList.setFocusTraversable(false);
+        disableSelection(songList);
 
         // ── Drag-to-reorder state ─────────────────────────────────────────────
         Song[]     dragging     = {null};
@@ -1539,6 +1649,7 @@ public final class GroupDetailBuilder {
                     setGraphic(row);
                 }
             };
+            cell.setFocusTraversable(false);
 
             cell.setOnMousePressed(e -> {
                 if (e.getTarget() instanceof Button || e.getTarget() instanceof ComboBox || cell.isEmpty()) return;
@@ -1549,7 +1660,8 @@ public final class GroupDetailBuilder {
             cell.setOnMouseDragged(e -> {
                 if (dragging[0] == null) return;
                 if (!dragActive[0]) {
-                    if (Math.abs(e.getScreenY() - pressScreenY[0]) < 8) return;
+                    double delta = Math.abs(e.getScreenY() - pressScreenY[0]);
+                    if (delta < 8) return;
                     dragActive[0] = true; justDragged[0] = false; songList.setCursor(Cursor.CLOSED_HAND);
                     // Levantamiento suave y elegante al empezar a arrastrar de verdad.
                     Node graphic = cell.getGraphic();
@@ -1752,10 +1864,16 @@ public final class GroupDetailBuilder {
         });
         row.getChildren().add(removeBtn);
 
-        row.setOnMouseClicked(e -> {
+        // Ver el comentario en buildSongGridCard: no se usa setOnMouseClicked porque JavaFX no
+        // sintetiza ese evento la primera vez en toda la sesión, aunque pulsar/soltar sí sean
+        // 100% fiables — el "click" se detecta a mano a partir de ambos.
+        double[] rowPressScene = {0, 0};
+        row.setOnMousePressed(e -> { if (!(e.getTarget() instanceof Button)) { rowPressScene[0] = e.getSceneX(); rowPressScene[1] = e.getSceneY(); } });
+        row.setOnMouseReleased(e -> {
             if (e.getTarget() instanceof Button) return;
+            if (Math.hypot(e.getSceneX() - rowPressScene[0], e.getSceneY() - rowPressScene[1]) > 8) return;
             if (e.getButton() == MouseButton.MIDDLE) { onOpenPaused.run(); return; }
-            onPlay.run();
+            if (e.getButton() == MouseButton.PRIMARY) onPlay.run();
         });
         return row;
     }
@@ -1853,7 +1971,15 @@ public final class GroupDetailBuilder {
         });
         row.getChildren().add(removeBtn);
 
-        row.setOnMouseClicked(e -> { if (!(e.getTarget() instanceof Button)) onSelect.run(); });
+        // Ver el comentario en buildSongGridCard: detección de click a mano (pulsar+soltar), no
+        // setOnMouseClicked.
+        double[] mashupRowPressScene = {0, 0};
+        row.setOnMousePressed(e -> { if (!(e.getTarget() instanceof Button)) { mashupRowPressScene[0] = e.getSceneX(); mashupRowPressScene[1] = e.getSceneY(); } });
+        row.setOnMouseReleased(e -> {
+            if (e.getTarget() instanceof Button) return;
+            if (Math.hypot(e.getSceneX() - mashupRowPressScene[0], e.getSceneY() - mashupRowPressScene[1]) > 8) return;
+            onSelect.run();
+        });
         return row;
     }
 
